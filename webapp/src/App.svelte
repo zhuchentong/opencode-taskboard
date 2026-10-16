@@ -2,14 +2,15 @@
   import { onMount } from "svelte"
   import { get } from "svelte/store"
   import { cycleThemeMode, themeMode, initTheme, type ThemeMode } from "./theme"
-  import { fetchBoard, createTask, putSettings, type ConnState } from "./lib/api"
-  import { applySnapshot, beginOptimistic, emptyState, visibleTasks, type BoardState } from "./lib/optimistic"
+  import { fetchBoard, createTask, putSettings, patchTask, type ConnState } from "./lib/api"
+  import { applySnapshot, beginOptimistic, emptyState, settle, visibleTasks, type BoardState } from "./lib/optimistic"
   import { notify } from "./lib/notify"
+  import { initDrag } from "./lib/drag.svelte"
   import Header from "./components/Header.svelte"
   import Board from "./components/Board.svelte"
   import Toasts from "./components/Toasts.svelte"
   import ConfirmDialog from "./components/ConfirmDialog.svelte"
-  import type { Task } from "./lib/types"
+  import type { Status, Task } from "./lib/types"
 
   const MODE_LABEL: Record<ThemeMode, string> = {
     auto: "主题：跟随系统",
@@ -37,14 +38,30 @@
   onMount(() => {
     initTheme()
     const unsub = themeMode.subscribe((m) => (mode = m))
+    const uninitDrag = initDrag(handleDrop)
     // 临时 2s 轮询：Task 9 由 SSE + 30s 对账轮询替换
     refresh()
     const timer = setInterval(refresh, 2000)
     return () => {
       clearInterval(timer)
       unsub()
+      uninitDrag()
     }
   })
+
+  function handleDrop(taskId: string, toStatus: Status) {
+    // 乐观更新协议：本地立即生效，失败回滚到服务器最近快照
+    board = beginOptimistic(board, taskId, { status: toStatus })
+    patchTask(taskId, { status: toStatus })
+      .then(async () => {
+        await refresh() // 先让服务器快照落地，再摘遮罩（settle 时序契约：applySnapshot 必须先于 settle(true)）
+        board = settle(board, taskId, true)
+      })
+      .catch((e) => {
+        board = settle(board, taskId, false)
+        notify("error", `移动失败：${e.message}`)
+      })
+  }
 
   function handleCreate(title: string, description: string) {
     createTask(title, description || undefined)

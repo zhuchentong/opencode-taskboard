@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Status, Task } from "../lib/types"
+  import { drag } from "../lib/drag.svelte"
   import Card from "./Card.svelte"
 
   let {
@@ -13,17 +14,26 @@
     tasks: Task[]
     onopen: (task: Task) => void
   } = $props()
+
+  const isOver = $derived(drag.overStatus === status && drag.draggingId !== null)
+  const dropIndex = $derived(isOver ? drag.overIndex : null)
 </script>
 
-<section class="column" data-status={status}>
+<section class="column" class:drag-over={isOver} data-status={status}>
   <h2>{label}<span class="count">{tasks.length}</span></h2>
-  {#if tasks.length === 0}
+  {#if tasks.length === 0 && !isOver}
     <p class="empty">暂无任务</p>
   {:else}
     <div class="cards">
-      {#each tasks as task (task.id)}
+      {#each tasks as task, i (task.id)}
+        {#if dropIndex === i}
+          <div class="drop-line" aria-hidden="true"></div>
+        {/if}
         <Card {task} {onopen} />
       {/each}
+      {#if dropIndex === tasks.length}
+        <div class="drop-line" aria-hidden="true"></div>
+      {/if}
     </div>
   {/if}
 </section>
@@ -64,5 +74,15 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+  }
+  .column.drag-over {
+    outline: 2px dashed var(--accent);
+    outline-offset: -2px;
+  }
+  .drop-line {
+    height: 2px;
+    border-radius: 1px;
+    background: var(--accent);
+    margin: -3px 0;
   }
 </style>

@@ -116,3 +116,32 @@ button.ghost:hover {
   padding: 24px 0;
   opacity: 0.75;
 }
+
+/* 拖拽全局视觉 */
+.drag-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 1000;
+  pointer-events: none;
+  opacity: 0.92;
+  background: var(--card);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+}
+.dragging-source {
+  opacity: 0.4;
+}
+body.drag-active {
+  cursor: grabbing;
+  user-select: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .drag-ghost,
+  .drop-line {
+    transition: none;
+    animation: none;
+  }
+}

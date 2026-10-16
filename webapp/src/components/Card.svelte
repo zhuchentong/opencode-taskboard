@@ -1,5 +1,6 @@
 <script lang="ts">
   import { STATUS_LABELS, timeAgo } from "../lib/board"
+  import { cardDrag, drag } from "../lib/drag.svelte"
   import type { Task } from "../lib/types"
 
   let {
@@ -17,13 +18,21 @@
         : `🤖 ${task.claim.agent} · ${task.claim.sessionID.slice(0, 8)}`
       : "",
   )
+  // Agent 认领中的分析/执行任务禁止用户拖拽（防误抢）
+  const draggable = $derived(
+    !(task.claim && task.claim.agent !== "human" && (task.status === "analyzing" || task.status === "executing")),
+  )
+  const isDragging = $derived(drag.draggingId === task.id)
 </script>
 
 <article
   class="card"
+  class:dragging-source={isDragging}
   tabindex="0"
   role="button"
   aria-label={`查看任务：${task.title}`}
+  data-draggable={draggable ? "yes" : "no"}
+  use:cardDrag={task.id}
   onclick={() => onopen(task)}
   onkeydown={(e) => {
     if (e.key === "Enter") onopen(task)
