@@ -153,6 +153,7 @@ BoardSettings { requireAnalysisConfirm: boolean }   // 默认 false（自动进�
 | DELETE | `/api/tasks/:id` | 删除任务 |
 | GET/PUT | `/api/settings` | 读/写看板设置（`requireAnalysisConfirm`） |
 | GET | `/api/health` | `{ ok: true, primary: boolean, projectID }` |
+| GET | `/api/logs` | 插件环形日志（上限 500 条），调试通道 |
 | GET | `/` | 看板静态页（服务端注入 token，URL 不携带） |
 
 防误触：启动时生成随机 token，注入静态页；POST/PATCH/PUT/DELETE 必须带 `X-Taskboard-Token` 头且 `Content-Type: application/json`，否则 403/415。GET 不校验。
@@ -205,18 +206,23 @@ BoardSettings { requireAnalysisConfirm: boolean }   // 默认 false（自动进�
 1. **单元测试**：`bun test`（test/ 下），覆盖状态机全流转、claim 竞态、HTTP API、领取语义。
 2. **Mock 模式（前端/API 快速迭代）**：`bun run dev` —— `src/dev.ts` 用 `memoryStore()` + `createServer()` 直接起服务（默认 4370），浏览器打开即调，无需 OpenCode。store 接口统一，内存实现与 storage 实现可互换。
 3. **集成调试（真实 OpenCode）**：
-   - `.debug/playground/` 是 gitignore 的测试项目，其 `opencode.json` 以绝对路径加载本插件：`{ "plugins": ["/home/zhuchentong/Projects/zhuchentong/opencode-taskboard"] }`。
-   - 在该目录运行 `opencode`；改插件代码后 `opencode service restart` 重载。
-   - 日志：`~/.local/share/opencode/log/opencode.log`（插件相关筛 `role=server`）；难复现问题用 `OPENCODE_LOG_LEVEL=DEBUG` 跑一次复现。
+   - `.debug/playground/` 是 gitignore 的测试项目，在 **`.opencode/plugins/taskboard-loader.ts`** 放装载器（v2.0.30 的 `plugins` 配置键不加载本地路径，spike 实证）：
+     ```ts
+     import plugin from "/home/zhuchentong/Projects/zhuchentong/opencode-taskboard/src/index.ts"
+     export default plugin
+     ```
+   - 在该目录运行 `opencode`；改插件代码后 `opencode service restart` 重载（本地依赖不触发自动重载）。
+   - 插件日志：`GET http://127.0.0.1:<port>/api/logs`（插件 console 不落入 opencode.log）；服务端侧问题再查 `~/.local/share/opencode/log/opencode.log`（筛 `role=server`）。
    - 服务状态：`opencode service status`；API 自检：`opencode api get /api/info`。
-4. 插件内日志统一走 `console.error`/`console.log`，进入 server 日志，前缀 `[taskboard]` 便于过滤。
+4. 插件日志统一前缀 `[taskboard]`，写入内存环形缓冲（上限 500 条），经 `GET /api/logs` 暴露；`console.*` 仅作 best-effort。
 
-## 12. Spike 清单（实施第一步，预计半小时）
+## 12. Spike 清单（已完成，结论见 `docs/superpowers/plans/2026-10-16-taskboard-spike-findings.md`）
 
-1. 插件进程内 `Bun.serve` 与 Bun 内置 API 可用性（否决则走第 9 节退化方案）。
-2. `ctx.storage` 作用域（是否按位置隔离）+ 同位置多会话的插件实例数（决定 key 是否带 projectID、正常模型是否成立）。
-3. `ctx.tool.transform` 命名空间生效名与 TUI 会话可见性。
-4. 命令 `execute` 里 best-effort 拉起浏览器的可行性（失败则只打印 URL，可接受）。
+1. ✅ 插件进程内 `Bun.serve` 可用 → inprocess 方案成立。
+2. ✅ `ctx.storage` 全局按插件 ID 共享、无位置隔离 → key 必须带 `ctx.location.project.id`；project.id 首次发现时生成、不随 commit 变化。
+3. ✅ 工具生效名 = `命名空间_短名`（`taskboard_<短名>`），Agent 会话可见可调用。
+4. ✅ 浏览器拉起走 best-effort（命令触发需 TUI，Task 8 验收；失败仅打印 URL）。
+5. ➕（spike 新增结论）`plugins` 配置键在 v2.0.30 不加载本地路径，集成装载走 `.opencode/plugins/` 装载器文件。
 
 ## 13. 测试策略
 
@@ -232,7 +238,7 @@ BoardSettings { requireAnalysisConfirm: boolean }   // 默认 false（自动进�
 ## 14. 未决问题
 
 - **假设 A**：分析确认开关默认 `false`（自动放行）——待用户确认，一行代码可改。
-- storage key 是否前置 projectID（spike #2）。
-- 进程内 `Bun.serve` 可用性（spike #1，否决则改子进程方案，需补充子进程一节设计）。
-- 工具生效名（spike #3，若与预期不符则调整命名）。
-- 浏览器自动拉起（spike #4，失败则仅打印 URL）。
+- ~~storage key 是否前置 projectID~~ → 已裁决：必须前置（spike #2）。
+- ~~进程内 Bun.serve~~ → 已确认可用（spike #1）。
+- ~~工具生效名~~ → 已确认 `taskboard_<短名>`（spike #3）。
+- 浏览器自动拉起：best-effort 实现，TUI 实际效果 Task 8 验收（失败则仅打印 URL，无设计影响）。
