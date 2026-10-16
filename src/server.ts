@@ -47,7 +47,16 @@ const MIME: Record<string, string> = {
 
 export function createServer(
   store: Store,
-  opts: { port: number; token: string; webDir: string; primary: boolean; projectID: string; logs?: () => readonly string[] },
+  opts: {
+    port: number
+    token: string
+    webDir: string
+    primary: boolean
+    projectID: string
+    logs?: () => readonly string[]
+    /** 每次写广播快照后异步触发（自动派发器等观察者）；不影响响应 */
+    onWrite?: () => void
+  },
 ): ServerHandle {
   const { token, webDir } = opts
 
@@ -97,6 +106,7 @@ export function createServer(
 
   async function emitSnapshot(): Promise<void> {
     emit({ type: "snapshot", tasks: await store.list(), settings: await store.getSettings() })
+    if (opts.onWrite) setTimeout(opts.onWrite, 0)
   }
 
   function handleEvents(req: Request): Response {

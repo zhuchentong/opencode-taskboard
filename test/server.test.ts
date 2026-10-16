@@ -11,7 +11,7 @@ afterEach(() => {
   while (started.length) started.pop()?.stop()
 })
 
-function setup(store: Store) {
+function setup(store: Store, extra: Partial<Parameters<typeof createServer>[1]> = {}) {
   const handle = createServer(store, {
     port: 0,
     token: "tok123",
@@ -19,6 +19,7 @@ function setup(store: Store) {
     primary: true,
     projectID: "proj-test",
     logs: () => ["line-a", "line-b"],
+    ...extra,
   })
   started.push(handle)
   return `http://127.0.0.1:${handle.actualPort}`
@@ -140,6 +141,15 @@ describe("REST API", () => {
     // 空 patch → 400
     const empty = await fetch(`${base}/api/settings`, { method: "PUT", headers: H, body: JSON.stringify({}) })
     expect(empty.status).toBe(400)
+  })
+
+  test("写操作触发 onWrite 观察者（自动派发器挂点）", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    let calls = 0
+    const base = setup(s, { onWrite: () => calls++ })
+    await fetch(`${base}/api/tasks`, { method: "POST", headers: H, body: JSON.stringify({ title: "t" }) })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(calls).toBe(1)
   })
 
   test("health / logs / 未知 API 路径", async () => {

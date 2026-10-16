@@ -4,6 +4,7 @@ import { createServer, type ServerHandle } from "./server"
 import { registerTools } from "./tools"
 import { registerCommands } from "./commands"
 import { clientStore } from "./client"
+import { initDispatcher } from "./dispatcher"
 
 const BASE_PORT_DEFAULT = 4370
 const MAX_LOGS = 500
@@ -40,6 +41,8 @@ async function arbitrate(opts: {
   proxyStore: Store
   log: (m: string) => void
   logs: () => readonly string[]
+  /** 延迟绑定的写观察者（自动派发器在仲裁后装配） */
+  hooks: { onWrite?: () => void }
 }): Promise<{ handle: ServerHandle; store: Store; primary: boolean; primaryPort: number }> {
   const tryBind = (p: number, store: Store, primary: boolean): ServerHandle | undefined => {
     try {
@@ -50,6 +53,7 @@ async function arbitrate(opts: {
         primary,
         projectID: opts.projectID,
         logs: opts.logs,
+        onWrite: () => opts.hooks.onWrite?.(),
       })
     } catch {
       return undefined
@@ -121,6 +125,7 @@ export default Plugin.define({
 
     const webDir = new URL("./web/", import.meta.url).pathname
 
+    const hooks: { onWrite?: () => void } = {}
     const arb = await arbitrate({
       port,
       token,
@@ -130,8 +135,18 @@ export default Plugin.define({
       proxyStore: clientStore(`http://127.0.0.1:${port}`, token),
       log,
       logs: () => logs,
+      hooks,
     })
     log(`就绪：${arb.primary ? "主实例" : "次要实例"} board=http://127.0.0.1:${arb.primaryPort}/`)
+
+    // 自动派发器仅主实例装配（写都串行到主实例，次要实例派发会双派）
+    let dispatcher: ReturnType<typeof initDispatcher> | null = null
+    if (arb.primary) {
+      dispatcher = initDispatcher(
+        { session: ctx.session as never, storage: ctx.storage, projectID },
+        { store: arb.store, log, onWrite: (fn) => (hooks.onWrite = fn) },
+      )
+    }
 
     await safeRegister(arb.handle, [
       () => registerTools(ctx as never, arb.store),
@@ -139,6 +154,7 @@ export default Plugin.define({
     ])
 
     return () => {
+      dispatcher?.dispose()
       arb.handle.stop()
       log("已卸载，HTTP 服务停止")
     }
