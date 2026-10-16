@@ -7,7 +7,10 @@
   },
   "scripts": {
     "dev": "bun run src/dev.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "build:web": "cd webapp && bun x vite build",
+    "dev:web": "cd webapp && bun x vite",
+    "watch:web": "cd webapp && bun x vite build --watch"
   },
   "dependencies": {
     "@opencode/plugin": "2.0.30"

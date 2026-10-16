@@ -179,7 +179,18 @@ BoardSettings { requireAnalysisConfirm: boolean }   // 默认 false（自动进�
 
 ## 8. 前端
 
-原生 HTML/JS/CSS：七列看板（列头带计数）、HTML5 拖拽换列（PATCH）、顶部新建任务 + 设置开关（分析确认）、卡片展开编辑标题/描述、显示 claim 与时间、评论列表与添加入口、确认/打回按钮（`analysis_confirm`、`completion_confirm` 两列，打回弹评论输入框，必填）、2s 轮询 `/api/tasks` 与 `/api/settings`。
+> **2026-10-16 修订（Svelte 5 重构）**：本节原「原生 HTML/JS/CSS、无构建」的决策已被用户显式推翻，理由：原生实现的交互打磨成本高于组件化方案（操作反馈、动画、详情面板、拖拽手感四项痛点）；代价是引入仅构建期的 Vite/Svelte 工具链（运行时零依赖不变，产物入库后用户安装仍只需 `src/` + 装载器）。
+
+**技术栈**：Svelte 5（runes）+ Vite，源码在 `webapp/`，构建产物固定文件名输出到 `src/web/` 并提交入库（`bun run build:web`）。
+
+**交互与体验**：
+- 七列看板（列头带计数、空列提示、首载骨架屏），卡片 keyed 渲染 + 跨列 flip 动画
+- **Pointer Events 自研拖拽**：拖影跟随、目标列高亮、插入位置指示（视觉层）；Agent 认领中的分析/执行任务禁止用户拖动
+- **乐观更新协议**：所有写本地立即生效（`beginOptimistic` 遮罩），SSE 快照回流不覆盖在途写，失败回滚到服务器最近快照并弹 toast；成功路径先应用快照再摘遮罩
+- **SSE 实时**：`GET /api/events` 订阅快照（免 token），断线自动重连，连续 3 次失败降级 5s 轮询 + 30s 对账轮询恒开；Header 连接状态点（live/reconnecting/polling）
+- **任务详情侧滑面板**：行内编辑标题/描述（Esc 还原、空标题不保存）、完整评论流与添加、通过/打回（打回原因必填）、删除（自定义确认弹层）
+- 全部通知用 toast、确认用自定义弹层（消灭原生 alert/confirm）；主题跟随系统深浅色 + 手动切换；键盘可达（卡片 focus + Enter 开详情 + Esc 关闭/还原，焦点返还）
+- 桌面端为主；窄屏不专门适配
 
 ## 9. 并发与实例模型
 
@@ -201,10 +212,10 @@ BoardSettings { requireAnalysisConfirm: boolean }   // 默认 false（自动进�
 
 ## 11. 开发与调试工作流
 
-仓库自带三层调试能力，全部不依赖构建步骤：
+仓库自带三层调试能力：
 
-1. **单元测试**：`bun test`（test/ 下），覆盖状态机全流转、claim 竞态、HTTP API、领取语义。
-2. **Mock 模式（前端/API 快速迭代）**：`bun run dev` —— `src/dev.ts` 用 `memoryStore()` + `createServer()` 直接起服务（默认 4370），浏览器打开即调，无需 OpenCode。store 接口统一，内存实现与 storage 实现可互换。
+1. **单元测试**：`bun test`（test/ 与 webapp/test/ 下），覆盖状态机全流转、claim 竞态、HTTP API、SSE 契约、双实例代理、前端纯函数（分组/乐观协议/SSE 客户端）。
+2. **Mock 模式（前端/API 快速迭代）**：`bun run dev` —— `src/dev.ts` 用内存后端 + `createServer()` 直接起服务（默认 4370），浏览器打开即调，无需 OpenCode。前端 HMR 迭代用 `bun run dev:web`（Vite dev server，`/api` 代理到 4370）；改前端后 `bun run build:web` 重建产物（提交入库，固定文件名避免 hash 污染）。
 3. **集成调试（真实 OpenCode）**：
    - `.debug/playground/` 是 gitignore 的测试项目，在 **`.opencode/plugins/taskboard-loader.ts`** 放装载器（v2.0.30 的 `plugins` 配置键不加载本地路径，spike 实证）：
      ```ts
@@ -213,6 +224,8 @@ BoardSettings { requireAnalysisConfirm: boolean }   // 默认 false（自动进�
      ```
    - 在该目录运行 `opencode`；改插件代码后 `opencode service restart` 重载（本地依赖不触发自动重载）。
    - 插件日志：`GET http://127.0.0.1:<port>/api/logs`（插件 console 不落入 opencode.log）；服务端侧问题再查 `~/.local/share/opencode/log/opencode.log`（筛 `role=server`）。
+
+**用户安装**（产物已入库，无需 Node 工具链）：拷贝 `src/` 到目标项目，并在目标项目 `.opencode/plugins/` 放装载器文件指向 `src/index.ts`。前端重建仅开发时需要（`cd webapp && bun install && bun run build:web`）。
    - 服务状态：`opencode service status`；API 自检：`opencode api get /api/info`。
 4. 插件日志统一前缀 `[taskboard]`，写入内存环形缓冲（上限 500 条），经 `GET /api/logs` 暴露；`console.*` 仅作 best-effort。
 

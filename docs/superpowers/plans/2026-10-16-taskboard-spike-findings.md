@@ -69,3 +69,19 @@ export default plugin
 - `emptyOutDir` 连带删除旧 vanilla 前端四文件——Task 2 的实质删除并入 Task 1 提交（589945d），保留每提交皆绿；Task 2 仅余测试删除与残留验证（boardKey grep 0 命中）
 - 真实实例伺服验证 OK：重启+激活后首页注入真实 token（bb3c62b5…），`/assets/board.js` 200 / 25578B
 - 运维注意：webapp/node_modules 由根 .gitignore 的 `node_modules/` 规则覆盖，无需追加
+
+## Webapp Svelte 重构集成验收记录（2026-10-16，计划 2026-10-16-webapp-svelte-refactor.md Task 12）
+
+环境：真实 OpenCode v2.0.30 共享服务 + playground 装载器；构建产物 board.js 65KB(gzip 25KB)/board.css 8.5KB。
+
+| 项 | 结果 | 证据 |
+|----|------|------|
+| 服务重启激活与产物伺服 | ✅ | token 注入 bb3c62b5…；board.js/board.css 均 200 |
+| SSE hello 帧与写广播 | ✅ | 连接即收 `{"type":"hello"}`；POST 任务后监听流收到含新任务 id 的 snapshot |
+| 拖拽写路径与评论动作 | ✅ | PATCH status→pending、action:comment 服务端核验通过 |
+| Agent 闭环（Code Mode 工具） | ✅ | task_56f944b7 claim→analyze→complete 达 completion_confirm，result=验收闭环完成，claim 保留会话 |
+| 同项目双实例代理 | ✅（测试层） | test/proxy.test.ts：次要端口 health primary:false、经次要端口 claim/patch 落主实例存储 |
+| 双实例真实环境 | ⚠️ 环境受限 | **新事实**：v2.0.30 插件 setup 按服务进程×项目只执行一次——同项目第二个 `opencode run` 不会生成次要实例（4371 未监听）；真实双实例需两个 service 进程。代理代码路径已由测试确定性覆盖 |
+| 全量测试 | ✅ | bun test 82 例 11 文件全绿（含 5 例 SSE、10 例乐观协议、4 例 SSE 客户端、1 例双实例代理） |
+
+**遗留人工项**：浏览器实际点按体验（新 UI 全交互：拖拽/详情面板/toast/主题切换）；TUI 斜杠命令触发。验收任务 task_56f944b7 特意留在「完成确认」列，打开 `http://127.0.0.1:4370/` 点「通过」即可体验收尾。
