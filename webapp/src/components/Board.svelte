@@ -5,11 +5,17 @@
 
   let {
     tasks,
+    pendingIds,
+    flashIds,
     onopen,
     onconfirm,
     onquickreject,
   }: {
     tasks: Task[]
+    /** 乐观写入在途的任务 id 集合 */
+    pendingIds: Set<string>
+    /** 失败回滚待红闪的任务 id 集合 */
+    flashIds: Set<string>
     onopen: (task: Task) => void
     onconfirm?: (task: Task) => void
     onquickreject?: (task: Task) => void
@@ -28,6 +34,8 @@
       {onopen}
       {onconfirm}
       {onquickreject}
+      {pendingIds}
+      {flashIds}
     />
   {/each}
 </main>

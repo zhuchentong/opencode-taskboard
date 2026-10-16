@@ -8,6 +8,8 @@
     onopen,
     onconfirm,
     onquickreject,
+    pendingIds,
+    flashIds,
   }: {
     task: Task
     onopen: (task: Task) => void
@@ -15,6 +17,8 @@
     onconfirm?: (task: Task) => void
     /** 确认列快速打回：打开详情面板并展开打回表单 */
     onquickreject?: (task: Task) => void
+    pendingIds?: Set<string>
+    flashIds?: Set<string>
   } = $props()
 
   const claimText = $derived(
@@ -29,6 +33,8 @@
     !(task.claim && task.claim.agent !== "human" && (task.status === "analyzing" || task.status === "executing")),
   )
   const isDragging = $derived(drag.draggingId === task.id)
+  const inflight = $derived(pendingIds?.has(task.id) ?? false)
+  const failFlash = $derived(flashIds?.has(task.id) ?? false)
   const canConfirm = $derived(
     (task.status === "analysis_confirm" || task.status === "completion_confirm") && (onconfirm || onquickreject),
   )
@@ -37,6 +43,8 @@
 <article
   class="card"
   class:dragging-source={isDragging}
+  class:inflight
+  class:fail-flash={failFlash}
   tabindex="0"
   role="button"
   aria-label={`查看任务：${task.title}`}
@@ -125,6 +133,27 @@
     height: 1px;
     overflow: hidden;
     clip: rect(0 0 0 0);
+  }
+  .card.inflight {
+    opacity: 0.6;
+    animation: inflight-shimmer 1s infinite;
+  }
+  @keyframes inflight-shimmer {
+    50% {
+      border-color: var(--accent);
+    }
+  }
+  .card.fail-flash {
+    animation: fail-flash 0.6s ease-out;
+  }
+  @keyframes fail-flash {
+    0%,
+    45% {
+      box-shadow: 0 0 0 3px var(--danger);
+    }
+    100% {
+      box-shadow: none;
+    }
   }
   .quick {
     display: none;

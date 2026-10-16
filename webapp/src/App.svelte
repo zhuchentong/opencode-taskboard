@@ -29,6 +29,19 @@
 
   const visible = $derived(visibleTasks(board))
   const detailTask = $derived(detailId ? (visible.find((t) => t.id === detailId) ?? null) : null)
+  // 乐观写入的视觉态：在途（半透明+shimmer）与失败回滚（红闪一拍）
+  let flashIds = $state<Set<string>>(new Set())
+
+  function flashFail(taskId: string) {
+    const next = new Set(flashIds)
+    next.add(taskId)
+    flashIds = next
+    setTimeout(() => {
+      const s = new Set(flashIds)
+      s.delete(taskId)
+      flashIds = s
+    }, 650)
+  }
 
   function openDetail(task: Task) {
     detailInitialReject = false
@@ -57,6 +70,7 @@
       })
       .catch((e) => {
         board = settle(board, taskId, false)
+        flashFail(taskId)
         notify("error", `${failMsg}：${e.message}`)
       })
   }
@@ -152,7 +166,7 @@
 />
 
 {#if loaded}
-  <Board tasks={visible} onopen={openDetail} onconfirm={quickConfirm} onquickreject={quickReject} />
+  <Board tasks={visible} pendingIds={board.pending} flashIds={flashIds} onopen={openDetail} onconfirm={quickConfirm} onquickreject={quickReject} />
 {:else}
   <main class="board skeleton" aria-label="加载中">
     {#each Array(7) as _, i (i)}

@@ -8,6 +8,8 @@
     label,
     tasks,
     empty,
+    pendingIds,
+    flashIds,
     onopen,
     onconfirm,
     onquickreject,
@@ -16,6 +18,8 @@
     label: string
     tasks: Task[]
     empty?: string
+    pendingIds: Set<string>
+    flashIds: Set<string>
     onopen: (task: Task) => void
     onconfirm?: (task: Task) => void
     onquickreject?: (task: Task) => void
@@ -35,7 +39,7 @@
         {#if dropIndex === i}
           <div class="drop-line" aria-hidden="true"></div>
         {/if}
-        <Card {task} {onopen} {onconfirm} {onquickreject} />
+        <Card {task} {onopen} {onconfirm} {onquickreject} {pendingIds} {flashIds} />
       {/each}
       {#if dropIndex === tasks.length}
         <div class="drop-line" aria-hidden="true"></div>
