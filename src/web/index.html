@@ -1,47 +1,15 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>任务看板</title>
-<link rel="stylesheet" href="/style.css">
-</head>
-<body>
-<header>
-  <h1>📋 任务看板</h1>
-  <form id="new-task">
-    <input id="new-title" placeholder="新任务标题，回车创建（进入待规划）" autocomplete="off" required>
-    <input id="new-desc" placeholder="描述（可选）" autocomplete="off">
-    <button type="submit">创建</button>
-  </form>
-  <label class="setting" title="开启后：分析完成后停在「分析确认」列，需人工放行才进入执行中">
-    <input type="checkbox" id="require-analysis"> 分析需人工确认
-  </label>
-</header>
-<main id="board"></main>
-<dialog id="dialog">
-  <form id="dialog-form">
-    <h3 id="dialog-title">打回任务</h3>
-    <p id="dialog-hint">任务将回到「待领取」列，原因会作为评论保留。</p>
-    <textarea id="dialog-comment" placeholder="打回原因（必填，将作为评论保留）" required></textarea>
-    <menu>
-      <button type="button" id="dialog-cancel">取消</button>
-      <button type="submit" id="dialog-ok" class="danger">确定</button>
-    </menu>
-  </form>
-</dialog>
-<dialog id="edit-dialog">
-  <form id="edit-form">
-    <h3>编辑任务</h3>
-    <input id="edit-title" placeholder="标题（必填）" required>
-    <textarea id="edit-desc" placeholder="描述"></textarea>
-    <menu>
-      <button type="button" id="edit-cancel">取消</button>
-      <button type="submit">保存</button>
-    </menu>
-  </form>
-</dialog>
-<script>window.__TASKBOARD_TOKEN__ = "__TASKBOARD_TOKEN_VALUE__";</script>
-<script type="module" src="/app.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>任务看板</title>
+    <script>
+      window.__TASKBOARD_TOKEN__ = "__TASKBOARD_TOKEN_VALUE__";
+    </script>
+    <script type="module" crossorigin src="/assets/board.js"></script>
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
 </html>
