@@ -137,6 +137,86 @@ describe("REST API", () => {
   })
 })
 
+describe("工具操作代理路由", () => {
+  async function setupStore() {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    const base = setup(s)
+    return { s, base }
+  }
+
+  test("POST /api/claim 无 id 领最旧 pending；analyze/complete 闭环", async () => {
+    const { s, base } = await setupStore()
+    for (const title of ["甲", "乙"]) {
+      const t = await s.create({ title })
+      await s.patch(t.id, { status: "pending" })
+    }
+    const pend = (await (await fetch(`${base}/api/tasks`)).json()) as { id: string }[]
+
+    const r1 = await fetch(`${base}/api/claim`, {
+      method: "POST",
+      headers: H,
+      body: JSON.stringify({ sessionID: "sess-1" }),
+    })
+    expect(r1.status).toBe(200)
+    const claimed = (await r1.json()) as { id: string; status: string }
+    expect(claimed.status).toBe("analyzing")
+    expect(pend.map((p) => p.id)).toContain(claimed.id)
+
+    const r2 = await fetch(`${base}/api/tasks/${claimed.id}/analyze`, {
+      method: "POST",
+      headers: H,
+      body: JSON.stringify({ sessionID: "sess-1", analysis: "方案" }),
+    })
+    expect(((await r2.json()) as { status: string }).status).toBe("executing")
+
+    const r3 = await fetch(`${base}/api/tasks/${claimed.id}/complete`, {
+      method: "POST",
+      headers: H,
+      body: JSON.stringify({ sessionID: "sess-1", result: "ok" }),
+    })
+    expect(((await r3.json()) as { status: string }).status).toBe("completion_confirm")
+  })
+
+  test("release 与 notes 路由；未领取者 → 400 not_claimer", async () => {
+    const { s, base } = await setupStore()
+    const t = await s.create({ title: "t" })
+    await s.patch(t.id, { status: "pending" })
+
+    const r0 = await fetch(`${base}/api/tasks/${t.id}/analyze`, {
+      method: "POST",
+      headers: H,
+      body: JSON.stringify({ sessionID: "nobody", analysis: "x" }),
+    })
+    expect(r0.status).toBe(400)
+    expect(((await r0.json()) as { error: { code: string } }).error.code).toBe("invalid_transition")
+
+    await fetch(`${base}/api/claim`, { method: "POST", headers: H, body: JSON.stringify({ sessionID: "sess-9" }) })
+
+    const r1 = await fetch(`${base}/api/tasks/${t.id}/analyze`, {
+      method: "POST",
+      headers: H,
+      body: JSON.stringify({ sessionID: "nobody", analysis: "x" }),
+    })
+    expect(r1.status).toBe(400)
+    expect(((await r1.json()) as { error: { code: string } }).error.code).toBe("not_claimer")
+
+    await fetch(`${base}/api/claim`, { method: "POST", headers: H, body: JSON.stringify({ sessionID: "sess-9" }) })
+    const rn = await fetch(`${base}/api/tasks/${t.id}/notes`, {
+      method: "POST",
+      headers: H,
+      body: JSON.stringify({ sessionID: "sess-9", result: "进度 30%" }),
+    })
+    expect(((await rn.json()) as { result: string }).result).toBe("进度 30%")
+
+    const rr = await fetch(`${base}/api/tasks/${t.id}/release`, {
+      method: "POST",
+      headers: H,
+      body: JSON.stringify({ sessionID: "sess-9" }),
+    })
+    expect(((await rr.json()) as { status: string; claim: unknown }).status).toBe("pending")
+  })
+})
+
 describe("静态页", () => {
   test("GET / 注入 token；不存在文件 404 JSON", async () => {
     mkdirSync(FIXDIR, { recursive: true })

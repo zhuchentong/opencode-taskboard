@@ -104,6 +104,45 @@ export function createServer(
         return Response.json(task, { status: 201 })
       }
     }
+    if (pathname === "/api/claim" && method === "POST") {
+      const bad = guard(req)
+      if (bad) return bad
+      const body = await readJson(req)
+      return Response.json(
+        await store.claim({
+          id: typeof body.id === "string" ? body.id : undefined,
+          sessionID: String(body.sessionID ?? ""),
+          agent: typeof body.agent === "string" ? body.agent : "agent",
+        }),
+      )
+    }
+    const opMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/(analyze|complete|release|notes)$/)
+    if (opMatch && method === "POST") {
+      const bad = guard(req)
+      if (bad) return bad
+      const body = await readJson(req)
+      const id = decodeURIComponent(opMatch[1])
+      const sessionID = String(body.sessionID ?? "")
+      switch (opMatch[2]) {
+        case "analyze":
+          return Response.json(await store.analyze({ id, sessionID, analysis: String(body.analysis ?? "") }))
+        case "complete":
+          return Response.json(
+            await store.complete({ id, sessionID, result: typeof body.result === "string" ? body.result : undefined }),
+          )
+        case "release":
+          return Response.json(await store.release({ id, sessionID }))
+        case "notes":
+          return Response.json(
+            await store.updateNotes({
+              id,
+              sessionID,
+              analysis: typeof body.analysis === "string" ? body.analysis : undefined,
+              result: typeof body.result === "string" ? body.result : undefined,
+            }),
+          )
+      }
+    }
     const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/)
     if (taskMatch) {
       const id = decodeURIComponent(taskMatch[1])

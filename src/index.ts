@@ -1,67 +1,119 @@
 import { Plugin } from "@opencode/plugin"
+import { createStore, storageBackend, type Store } from "./store"
+import { createServer, type ServerHandle } from "./server"
+import { registerTools } from "./tools"
+import { registerCommands } from "./commands"
+import { clientStore } from "./client"
 
-// Task 1 探针版：验证 Bun.serve / storage 作用域 / 工具生效名 / 命令注册。
-// 后续 Task 6 将整体重写为本体插件。
+const BASE_PORT_DEFAULT = 4370
+const MAX_LOGS = 500
+const PORT_SCAN_TRIES = 20
+
+/**
+ * 端口归属裁决（spec §9）：
+ * - 绑定基准端口成功 → 主实例（唯一写者，本地 store）
+ * - 基准端口被本插件主实例占用 → 次要实例（写操作经 clientStore 代理）
+ * - 基准端口被其他服务占用 → 上移端口作为主实例
+ */
+async function arbitrate(opts: {
+  port: number
+  token: string
+  webDir: string
+  localStore: Store
+  proxyStore: Store
+  log: (m: string) => void
+  logs: () => readonly string[]
+}): Promise<{ handle: ServerHandle; store: Store; primary: boolean; primaryPort: number }> {
+  const tryBind = (p: number, store: Store, primary: boolean): ServerHandle | undefined => {
+    try {
+      return createServer(store, { port: p, token: opts.token, webDir: opts.webDir, primary, logs: opts.logs })
+    } catch {
+      return undefined
+    }
+  }
+
+  const first = tryBind(opts.port, opts.localStore, true)
+  if (first) {
+    opts.log(`主实例绑定基准端口 ${opts.port}`)
+    return { handle: first, store: opts.localStore, primary: true, primaryPort: opts.port }
+  }
+
+  let secondary = false
+  try {
+    const res = await fetch(`http://127.0.0.1:${opts.port}/api/health`)
+    const health = (await res.json()) as { ok?: boolean }
+    secondary = health?.ok === true
+  } catch {
+    secondary = false
+  }
+
+  if (secondary) {
+    for (let p = opts.port + 1; p < opts.port + PORT_SCAN_TRIES; p++) {
+      const h = tryBind(p, opts.proxyStore, false)
+      if (h) {
+        opts.log(`次要实例：写操作代理到 ${opts.port}，本实例端口 ${p}`)
+        return { handle: h, store: opts.proxyStore, primary: false, primaryPort: opts.port }
+      }
+    }
+    throw new Error(`[taskboard] 无法为次要实例找到可用端口（${opts.port + 1}..${opts.port + PORT_SCAN_TRIES - 1}）`)
+  }
+
+  for (let p = opts.port + 1; p < opts.port + PORT_SCAN_TRIES; p++) {
+    const h = tryBind(p, opts.localStore, true)
+    if (h) {
+      opts.log(`基准端口 ${opts.port} 被其他服务占用，主实例上移到 ${p}`)
+      return { handle: h, store: opts.localStore, primary: true, primaryPort: p }
+    }
+  }
+  throw new Error(`[taskboard] 无法找到可用端口（${opts.port}..${opts.port + PORT_SCAN_TRIES - 1}）`)
+}
+
 export default Plugin.define({
-  id: "taskboard-spike",
+  id: "taskboard",
   async setup(ctx) {
-    console.log(`[taskboard] spike setup dir=${ctx.location.directory} app=v${ctx.app.version}`)
-
-    // 1) Bun.serve 可用性
-    let serve: { hostname: string; port: number; stop(close?: boolean): void } | undefined
-    try {
-      serve = Bun.serve({
-        hostname: "127.0.0.1",
-        port: 4390,
-        fetch: () => Response.json({ ok: true }),
-      })
-      console.log(`[taskboard] Bun.serve OK http://${serve.hostname}:${serve.port}`)
-    } catch (e) {
-      console.error("[taskboard] Bun.serve FAILED", e)
+    const logs: string[] = []
+    const log = (m: string) => {
+      const line = `[${new Date().toISOString()}] ${m}`
+      logs.push(line)
+      if (logs.length > MAX_LOGS) logs.shift()
+      console.log(`[taskboard] ${m}`)
     }
 
-    // 2) storage 读写与扫描
-    try {
-      await ctx.storage.set("spike/probe", { dir: ctx.location.directory, ts: Date.now() })
-      const scanned = await ctx.storage.scan({ prefix: "spike/" })
-      console.log(`[taskboard] storage.scan(spike/) => ${JSON.stringify(scanned)}`)
-    } catch (e) {
-      console.error("[taskboard] storage FAILED", e)
+    const rawOpts = (ctx.options ?? {}) as Record<string, unknown>
+    const port = Number(rawOpts.port) > 0 ? Number(rawOpts.port) : BASE_PORT_DEFAULT
+    const requireAnalysisConfirm = rawOpts.requireAnalysisConfirm === true
+    const projectID = ctx.location.project.id
+
+    log(`启动：project=${projectID} port=${port} requireAnalysisConfirm=${requireAnalysisConfirm}`)
+
+    const localStore = createStore(storageBackend(ctx.storage, `${projectID}/`), { requireAnalysisConfirm })
+
+    // token 持久化：重启与多实例之间共享同一令牌
+    let token = (await ctx.storage.get(`${projectID}/settings/token`)) as string | undefined
+    if (!token) {
+      token = crypto.randomUUID().replaceAll("-", "").slice(0, 16)
+      await ctx.storage.set(`${projectID}/settings/token`, token)
     }
 
-    // 3) 工具命名空间与生效名
-    await ctx.tool.transform((editor) => {
-      editor.namespace({ name: "spike", description: "spike 探针工具" })
-      editor.add({
-        name: "hello",
-        description: "spike 探针：返回问候文本",
-        input: { type: "object", properties: {}, additionalProperties: false },
-        options: { namespace: "spike" },
-        execute: async () => ({ content: "hello from spike" }),
-      })
-    })
-    const tools = await ctx.tool.list()
-    console.log(`[taskboard] tool.list => ${tools.map((t) => t.id).join(",")}`)
+    const webDir = new URL("./web/", import.meta.url).pathname
 
-    // 4) 命令注册与浏览器拉起
-    await ctx.command.transform((editor) => {
-      editor.add({
-        name: "spike-open",
-        description: "spike 探针：打开看板地址",
-        execute: async () => {
-          try {
-            Bun.spawn(["xdg-open", "http://127.0.0.1:4390"])
-            console.log("[taskboard] xdg-open spawned OK")
-          } catch (e) {
-            console.error("[taskboard] xdg-open FAILED", e)
-          }
-        },
-      })
+    const arb = await arbitrate({
+      port,
+      token,
+      webDir,
+      localStore,
+      proxyStore: clientStore(`http://127.0.0.1:${port}`, token),
+      log,
+      logs: () => logs,
     })
+    log(`就绪：${arb.primary ? "主实例" : "次要实例"} board=http://127.0.0.1:${arb.primaryPort}/`)
+
+    await registerTools(ctx as never, arb.store)
+    await registerCommands(ctx as never, arb.store, { port: arb.primaryPort })
 
     return () => {
-      serve?.stop(true)
-      console.log("[taskboard] spike cleanup")
+      arb.handle.stop()
+      log("已卸载，HTTP 服务停止")
     }
   },
 })
