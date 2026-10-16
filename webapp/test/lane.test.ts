@@ -25,8 +25,8 @@ describe("insertIndex（泳道内插入判定，支持 wrap 多行）", () => {
   test("wrap 双行：判定限定在指针所在行，返回原始下标", () => {
     // 5 张卡：A B C D 在第 0 行（top 0），E 独占第 1 行（top 110，left 0）
     expect(insertIndex(5, 30, 50, rects(5))).toBe(0) // 指第 0 行 A 左半
-    expect(insertIndex(5, 100, 160, rects(5))).toBe(4) // 指第 1 行 E 左半 → 插 E 前（原下标 4）
-    expect(insertIndex(5, 300, 160, rects(5))).toBe(5) // 指第 1 行 E 右半 → 行尾之后
+    expect(insertIndex(5, 30, 160, rects(5))).toBe(4) // 指第 1 行 E 左半（0..100，中线 50）→ 插 E 前（原下标 4）
+    expect(insertIndex(5, 100, 160, rects(5))).toBe(5) // 指第 1 行 E 右半 → 行尾之后
   })
 
   test("指针落在两行之间 → 归属垂直中心更近的行", () => {
