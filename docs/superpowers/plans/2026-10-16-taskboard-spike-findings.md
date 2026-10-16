@@ -40,3 +40,24 @@ export default plugin
 - Task 4：路由表追加 `GET /api/logs`。
 - Task 6：装载与日志按上述决策；`KEY_PREFIX` 取 `ctx.location.project.id`。
 - Task 8：命令执行（/taskboard、/taskboard-claim）在 TUI 人工验收；playground 用装载器文件加载。
+
+## Task 8 集成验收记录（2026-10-16）
+
+环境：真实 OpenCode v2.0.30 共享服务，`.debug/playground/.opencode/plugins/taskboard-loader.ts` 装载。
+
+| 项 | 结果 | 证据 |
+|----|------|------|
+| 插件加载/服务就绪 | ✅ 主实例 4370 | `/api/health` → `{"ok":true,"primary":true}`；`/api/logs` 三条启动日志 |
+| 完整闭环（设置关） | ✅ pending→analyzing→executing→completion_confirm | 真实 Agent 会话领取 task_9f9a971d，产出 acceptance.txt（内容 hello taskboard），result 已填 |
+| 确认完成 | ✅ completion_confirm→done | PATCH confirm（等价网页按钮） |
+| 打回循环 | ✅ completion_confirm→pending、claim 清空、评论入列 | task_491f8b4a 被打回后由**新会话**（sessionID 已更换）重新认领，按评论要求返工，再次到达 completion_confirm，评论保留 |
+| 分析确认关卡（设置开） | ✅ analyze 停在 analysis_confirm，放行后→executing | task_5f9c2db9 实测；设置已恢复 false |
+| 并发 claim 竞态 | ✅ 恰一人成功 | 并发两请求：200 与 400(invalid_transition) |
+| 重启持久化 | ✅ | service restart + 重新激活后任务与状态原样保留（opencode.db kv） |
+| 工具可见性 | ✅（经 Code Mode 目录） | `tools.taskboard.list/claim/...` 由 Agent 经 `execute` 成功调用；原生 taskboard_* 形态依 Agent 宿主而定 |
+
+**验收中修复**：占位符重名导致前端 token 变 undefined（Task 7 已修，`964f807` 前的 e75798a…见 ledger）；认领提示补充代码工具目录路径（`964f807`）。
+
+**遗留人工项**（不影响自动化验收结论）：
+1. 浏览器实际点按体验（拖拽/弹层/轮询）——按钮走的是已测 REST 路由；task_491f8b4a 故意留在「完成确认」列，可直接打开 `http://127.0.0.1:4370/` 亲自点「通过」收尾。
+2. `/taskboard`、`/taskboard-claim` 命令的 TUI 触发（`opencode run` 无法触发斜杠命令，注册本身已验证）。
