@@ -6,6 +6,7 @@
   import { applySnapshot, beginOptimistic, emptyState, settle, visibleTasks, type BoardState } from "./lib/optimistic"
   import { notify } from "./lib/notify"
   import { initDrag } from "./lib/drag.svelte"
+  import { connectEvents } from "./lib/events"
   import Header from "./components/Header.svelte"
   import Board from "./components/Board.svelte"
   import Toasts from "./components/Toasts.svelte"
@@ -39,11 +40,16 @@
     initTheme()
     const unsub = themeMode.subscribe((m) => (mode = m))
     const uninitDrag = initDrag(handleDrop)
-    // 临时 2s 轮询：Task 9 由 SSE + 30s 对账轮询替换
-    refresh()
-    const timer = setInterval(refresh, 2000)
+    const disposeEvents = connectEvents({
+      onSnapshot: (tasks, settings) => {
+        board = applySnapshot(board, tasks, settings)
+        loaded = true
+      },
+      onStatus: (s) => (conn = s),
+    })
+    refresh() // SSE 建连前的首屏兜底
     return () => {
-      clearInterval(timer)
+      disposeEvents()
       unsub()
       uninitDrag()
     }

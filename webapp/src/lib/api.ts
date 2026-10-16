@@ -17,13 +17,16 @@ export class BoardApiError extends Error {
   }
 }
 
-const HEADERS = {
-  "Content-Type": "application/json",
-  "X-Taskboard-Token": window.__TASKBOARD_TOKEN__,
+function headers(): Record<string, string> {
+  // 惰性取值：模块加载期不碰 window（bun 测试环境无 DOM）
+  return {
+    "Content-Type": "application/json",
+    "X-Taskboard-Token": window.__TASKBOARD_TOKEN__,
+  }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, { ...init, headers: { ...HEADERS, ...(init?.headers ?? {}) } })
+  const res = await fetch(path, { ...init, headers: { ...headers(), ...(init?.headers ?? {}) } })
   if (!res.ok) {
     let code = "unknown"
     let message = `HTTP ${res.status}`
