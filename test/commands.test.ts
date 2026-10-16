@@ -10,7 +10,7 @@ describe("命令文本", () => {
 
   test("buildClaimPrompt 含完整工作流关键词", () => {
     const text = buildClaimPrompt()
-    for (const kw of ["领取", "分析", "执行", "完成确认"]) {
+    for (const kw of ["领取", "分析", "执行", "完成确认", "代码工具目录"]) {
       expect(text).toContain(kw)
     }
     expect(text).toContain("taskboard_claim")

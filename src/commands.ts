@@ -23,13 +23,13 @@ export function buildBoardText(url: string): string {
 
 export function buildClaimPrompt(): string {
   return [
-    "请使用 taskboard 工具完成一个看板任务的完整闭环：",
-    "1. 用 taskboard_claim 领取一个待领取任务（不带 id 自动领最旧；失败则按提示重试或停止）；",
-    "2. 先分析：阅读代码与任务描述，用 taskboard_analyze 提交分析结论与实施计划；",
-    "3. 若看板要求分析确认（claim 返回的提示会说明），提醒用户在「分析确认」列放行后再继续，不要跳过；",
-    "4. 按计划执行修改，期间可用 taskboard_update 更新进度；",
-    "5. 完成后用 taskboard_complete 提交执行结果，任务进入完成确认，等待用户在网页确认；",
-    "6. 若任务被打回（评论里说明原因），根据评论修正后重新提交。",
+    "请完成一个看板任务的完整闭环。taskboard 工具在代码工具目录的 taskboard 命名空间下（tools.taskboard.claim 等），也可能以原生 taskboard_* 工具出现；找不到时先在工具目录里搜索 taskboard。",
+    "1. 领取：taskboard_claim 领取一个待领取任务（不带 id 自动领最旧；失败则按提示重试或停止）；",
+    "2. 分析：阅读代码与任务描述，用 taskboard_analyze 提交分析结论与实施计划；",
+    "3. 若看板要求分析确认（领取返回的提示会说明），提醒用户在「分析确认」列放行后再继续，不要跳过；",
+    "4. 执行：按计划完成修改，期间可用 taskboard_update 更新进度；",
+    "5. 提交：完成后用 taskboard_complete 提交执行结果，任务进入完成确认，等用户在网页确认；",
+    "6. 若任务被打回（评论里写明原因），根据评论修正后重新提交完成。",
   ].join("\n")
 }
 
