@@ -1,8 +1,11 @@
 <script lang="ts">
   import { fade, fly } from "svelte/transition"
   import { STATUS_LABELS, timeAgo } from "../lib/board"
+  import { formatClock, formatDuration, phaseViews } from "../lib/duration"
+  import { ticker } from "../lib/ticker.svelte"
   import { confirmDialog } from "../lib/notify"
   import type { Task } from "../lib/types"
+  import Markdown from "./Markdown.svelte"
 
   let {
     task,
@@ -44,6 +47,8 @@
 
   const CONFIRM_COLS = ["analysis_confirm", "completion_confirm"]
   const canConfirm = $derived(CONFIRM_COLS.includes(task.status))
+  // 两段计时明细；进行中的段随心跳逐秒递增
+  const views = $derived(phaseViews(task, ticker.now))
 
   function saveTitle() {
     const v = title.trim()
@@ -153,10 +158,11 @@
   </label>
 
   {#if task.analysis}
-    <div class="field"><span>分析</span><p class="readonly">📌 {task.analysis}</p></div>
+    <!-- 用 div 而非 p：Markdown 渲染块级元素，<p> 会被浏览器提前闭合导致样式失效 -->
+    <div class="field"><span>分析</span><div class="readonly"><span aria-hidden="true">📌</span> <Markdown source={task.analysis} /></div></div>
   {/if}
   {#if task.result}
-    <div class="field"><span>结果</span><p class="readonly">✅ {task.result}</p></div>
+    <div class="field"><span>结果</span><div class="readonly"><span aria-hidden="true">✅</span> <Markdown source={task.result} /></div></div>
   {/if}
 
   <div class="meta">
@@ -170,6 +176,32 @@
       </span>
     {/if}
   </div>
+
+  {#if views.length > 0}
+    <section class="timing">
+      <h3>计时</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>阶段</th>
+            <th>开始</th>
+            <th>结束</th>
+            <th>用时</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each views as v (v.phase)}
+            <tr>
+              <td>{v.label}</td>
+              <td>{formatClock(v.startedAt)}</td>
+              <td>{v.running ? "进行中" : v.endedAt !== undefined ? formatClock(v.endedAt) : "—"}</td>
+              <td class="num">{v.running ? `已 ${formatDuration(v.duration)}` : formatDuration(v.duration)}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </section>
+  {/if}
 
   <section class="actions">
     {#if canConfirm}
@@ -277,6 +309,11 @@
     margin: 0;
     color: var(--muted);
     overflow-wrap: anywhere;
+    /* 图标 + Markdown 内容两列：避免块级内容把图标挤成独立一行 */
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0 4px;
+    align-items: start;
   }
   .meta {
     display: flex;
@@ -284,6 +321,38 @@
     gap: 10px;
     color: var(--muted);
     font-size: 12px;
+  }
+  .timing {
+    display: grid;
+    gap: 6px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px;
+  }
+  .timing h3 {
+    margin: 0;
+    font-size: 13px;
+  }
+  .timing table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .timing th {
+    text-align: left;
+    font-weight: 500;
+    padding: 0 6px 4px 0;
+    opacity: 0.75;
+  }
+  .timing td {
+    padding: 3px 6px 3px 0;
+    border-top: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  .timing .num {
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
   }
   .actions {
     display: flex;

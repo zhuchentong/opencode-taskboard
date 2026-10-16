@@ -19,6 +19,12 @@ export interface Claim {
   claimedAt: number
 }
 
+/** 一个执行阶段的计时区间；endedAt 缺省表示该阶段仍在进行 */
+export interface PhaseSpan {
+  startedAt: number
+  endedAt?: number
+}
+
 export interface Task {
   id: string
   title: string
@@ -28,6 +34,8 @@ export interface Task {
   result?: string
   comments: TaskComment[]
   claim?: Claim
+  /** 分析段/执行段各自的时间区间；无字段表示尚未记录（旧任务或尚未开工） */
+  spans?: Partial<Record<"analyzing" | "executing", PhaseSpan>>
   createdAt: number
   updatedAt: number
 }

@@ -7,6 +7,8 @@
 import { STATUSES } from "./lib/board"
   import { notify } from "./lib/notify"
   import { initDrag } from "./lib/drag.svelte"
+  import { hasRunningSpan } from "./lib/duration"
+  import { startTicker, stopTicker } from "./lib/ticker.svelte"
   import { connectEvents } from "./lib/events"
   import Header from "./components/Header.svelte"
   import Board from "./components/Board.svelte"
@@ -145,6 +147,13 @@ import { STATUSES } from "./lib/board"
       unsub()
       uninitDrag()
     }
+  })
+
+  // 心跳：仅当存在进行中的计时段时才每秒跳动（无任务在跑则停摆，不空转）。
+  // 依赖 visible，随 SSE 快照自动起停。
+  $effect(() => {
+    if (visible.some((t) => hasRunningSpan(t))) startTicker()
+    else stopTicker()
   })
 
   function handleDrop(taskId: string, toStatus: Status) {

@@ -1,3 +1,4 @@
+import { transitionSpans } from "./spans"
 import { StoreError, type BoardSettings, type Status, type Task, type TaskPatch } from "./types"
 
 export interface KVBackend {
@@ -218,6 +219,8 @@ export function createStore(
         }
         if (p.description !== undefined) next.description = p.description
 
+        // 人工流转（拖拽/键盘移动/确认/打回）同样驱动两段计时；只改标题描述时内部自动跳过
+        transitionSpans(task, next, now)
         next.updatedAt = now
         await backend.set(TASK_PREFIX + id, next)
         return next
@@ -268,8 +271,9 @@ export function createStore(
           ...target,
           status: "analyzing",
           claim: { sessionID: input.sessionID, agent: input.agent, claimedAt: now },
-          updatedAt: now,
         }
+        transitionSpans(target, next, now)
+        next.updatedAt = now
         await backend.set(TASK_PREFIX + next.id, next)
         return next
       })
@@ -283,12 +287,14 @@ export function createStore(
         }
         requireOwned(task, input.sessionID)
         const settings = await readSettings()
+        const now = Date.now()
         const next: Task = {
           ...task,
           analysis: input.analysis,
           status: settings.requireAnalysisConfirm ? "analysis_confirm" : "executing",
-          updatedAt: Date.now(),
         }
+        transitionSpans(task, next, now)
+        next.updatedAt = now
         await backend.set(TASK_PREFIX + next.id, next)
         return next
       })
@@ -301,8 +307,11 @@ export function createStore(
           throw new StoreError("invalid_transition", `任务状态为 ${task.status}，仅执行中任务可提交完成`)
         }
         requireOwned(task, input.sessionID)
-        const next: Task = { ...task, status: "completion_confirm", updatedAt: Date.now() }
+        const now = Date.now()
+        const next: Task = { ...task, status: "completion_confirm" }
         if (input.result !== undefined) next.result = input.result
+        transitionSpans(task, next, now)
+        next.updatedAt = now
         await backend.set(TASK_PREFIX + next.id, next)
         return next
       })
@@ -315,7 +324,10 @@ export function createStore(
           throw new StoreError("invalid_transition", `任务状态为 ${task.status}，仅分析中/执行中任务可放弃`)
         }
         requireOwned(task, input.sessionID)
-        const next: Task = { ...task, status: "pending", claim: undefined, updatedAt: Date.now() }
+        const now = Date.now()
+        const next: Task = { ...task, status: "pending", claim: undefined }
+        transitionSpans(task, next, now) // 回到待领取 = 新一轮，计时整体清空
+        next.updatedAt = now
         await backend.set(TASK_PREFIX + next.id, next)
         return next
       })

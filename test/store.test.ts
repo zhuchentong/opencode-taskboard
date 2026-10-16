@@ -406,3 +406,92 @@ describe("设置扩展与合并写入（autoDispatch）", () => {
     await expect(s.setSettings({})).rejects.toMatchObject({ code: "invalid_input" })
   })
 })
+
+describe("两段计时（spans）接入各写路径", () => {
+  const done = (s: Task["spans"]): boolean =>
+    !!s?.analyzing?.startedAt && !!s.analyzing.endedAt && !!s.executing?.startedAt && !!s.executing.endedAt
+
+  test("闭环 claim→analyze→complete→confirm：两段均有起止且首尾不倒挂", async () => {
+    const s = S(false)
+    const t = await toStatus(s, await s.create({ title: "t" }), "completion_confirm")
+    // 提交完成即封口执行段：等人工确认不再计时
+    const mid = await s.get(t.id)
+    expect(mid.spans?.analyzing?.endedAt).toBeGreaterThanOrEqual(mid.spans!.analyzing!.startedAt)
+    expect(mid.spans?.executing?.startedAt).toBeGreaterThanOrEqual(mid.spans!.analyzing!.endedAt!)
+    expect(mid.spans?.executing?.endedAt).toBeGreaterThanOrEqual(mid.spans!.executing!.startedAt)
+
+    const fin = await s.patch(t.id, { action: "confirm" })
+    expect(fin.status).toBe("done")
+    expect(done(fin.spans)).toBe(true)
+    // 等确认期间时长不再增长
+    expect(fin.spans!.executing!.endedAt).toBe(mid.spans!.executing!.endedAt)
+  })
+
+  test("执行中：执行段进行中（无 endedAt），实时可算当前时长", async () => {
+    const s = S(false)
+    const t = await toStatus(s, await s.create({ title: "t" }), "executing")
+    expect(t.spans?.executing?.startedAt).toBe(t.updatedAt)
+    expect(t.spans?.executing?.endedAt).toBeUndefined()
+    expect(t.spans?.analyzing?.endedAt).toBeGreaterThanOrEqual(t.spans!.analyzing!.startedAt)
+  })
+
+  test("需分析确认时：封口分析段并停表，确认后开执行段", async () => {
+    const s = S(true)
+    const t = await toStatus(s, await s.create({ title: "t" }), "analysis_confirm")
+    expect(t.spans?.analyzing?.endedAt).toBeGreaterThanOrEqual(t.spans!.analyzing!.startedAt)
+    expect(t.spans?.executing).toBeUndefined()
+
+    const exec = await s.patch(t.id, { action: "confirm" })
+    expect(exec.status).toBe("executing")
+    expect(exec.spans?.executing).toEqual({ startedAt: exec.updatedAt })
+  })
+
+  test("只改标题不误封口进行中的段", async () => {
+    const s = S(false)
+    const t = await toStatus(s, await s.create({ title: "t" }), "executing")
+    const r = await s.patch(t.id, { title: "改名" })
+    expect(r.spans?.executing).toEqual(t.spans?.executing)
+    expect(r.spans?.executing?.endedAt).toBeUndefined()
+  })
+
+  test("拖拽 analyzing→done：只封口分析段", async () => {
+    const s = S(false)
+    const t = await toStatus(s, await s.create({ title: "t" }), "analyzing")
+    const r = await s.patch(t.id, { status: "done" })
+    expect(r.spans?.analyzing?.endedAt).toBeGreaterThanOrEqual(r.spans!.analyzing!.startedAt)
+    expect(r.spans?.executing).toBeUndefined()
+  })
+
+  test("打回与放弃回到待领取：spans 整体清空，重新领取开新一轮", async () => {
+    const s = S(true)
+    const t = await toStatus(s, await s.create({ title: "t" }), "analysis_confirm")
+    const rejected = await s.patch(t.id, { action: "reject", comment: "重来" })
+    expect(rejected.spans).toBeUndefined()
+
+    const again = await s.claim({ id: t.id, sessionID: "s2", agent: "build" })
+    expect(again.spans?.analyzing?.startedAt).toBeGreaterThanOrEqual(t.spans!.analyzing!.startedAt)
+    expect(again.spans?.analyzing?.endedAt).toBeUndefined()
+
+    const released = await s.release({ id: t.id, sessionID: "s2" })
+    expect(released.spans).toBeUndefined()
+  })
+
+  test("人工拖入 analyzing 也开段，claim 会重开新一轮", async () => {
+    const s = S(false)
+    const t = await newPending(s)
+    const dragged = await s.patch(t.id, { status: "analyzing" })
+    expect(dragged.spans?.analyzing?.startedAt).toBe(dragged.updatedAt)
+
+    const back = await s.patch(t.id, { status: "planning" })
+    expect(back.spans?.analyzing?.endedAt).toBe(back.updatedAt)
+    const redriven = await s.patch(t.id, { status: "analyzing" })
+    expect(redriven.spans).toEqual({ analyzing: { startedAt: redriven.updatedAt } })
+  })
+
+  test("updateNotes 更新进度不干扰计时", async () => {
+    const s = S(false)
+    const t = await toStatus(s, await s.create({ title: "t" }), "executing")
+    const r = await s.updateNotes({ id: t.id, sessionID: "s1", result: "50%" })
+    expect(r.spans?.executing).toEqual(t.spans?.executing)
+  })
+})

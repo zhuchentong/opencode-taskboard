@@ -1,6 +1,8 @@
 <script lang="ts">
   import { STATUS_LABELS, timeAgo } from "../lib/board"
   import { cardDrag, drag } from "../lib/drag.svelte"
+  import { formatPhaseLine, formatPhaseTooltip } from "../lib/duration"
+  import { ticker } from "../lib/ticker.svelte"
   import type { Task } from "../lib/types"
 
   let {
@@ -41,6 +43,9 @@
   const canConfirm = $derived(
     (task.status === "analysis_confirm" || task.status === "completion_confirm") && (onconfirm || onquickreject),
   )
+  // 两段计时：进行中的段随 ticker 逐秒递增；绝对时间走悬浮提示
+  const phaseLine = $derived(formatPhaseLine(task, ticker.now))
+  const phaseTitle = $derived(formatPhaseTooltip(task, ticker.now))
 </script>
 
 <article
@@ -53,6 +58,7 @@
   role="button"
   aria-label={`查看任务：${task.title}`}
   data-draggable={draggable ? "yes" : "no"}
+  title={phaseTitle || undefined}
   use:cardDrag={task.id}
   onclick={() => onopen(task)}
   onkeydown={(e) => {
@@ -63,6 +69,9 @@
     }
   }}
 >
+  <div class="badge">
+    <span class="badge-dot"></span>{STATUS_LABELS[task.status]}
+  </div>
   <div class="title">{task.title}</div>
   {#if task.description}
     <div class="desc">{task.description}</div>
@@ -74,11 +83,11 @@
     <div class="desc note">✅ {task.result}</div>
   {/if}
   <div class="meta">
+    {#if phaseLine}<span class="dur">{phaseLine}</span>{/if}
     <span>{timeAgo(task.updatedAt)}</span>
     {#if claimText}<span>{claimText}</span>{/if}
     {#if task.comments.length > 0}<span>💬 {task.comments.length}</span>{/if}
   </div>
-  <span class="sr-status">{STATUS_LABELS[task.status]}</span>
   {#if canConfirm}
     <div class="quick" role="toolbar" aria-label="快速操作">
       <button
@@ -116,6 +125,27 @@
     outline: 2px solid var(--accent);
     outline-offset: -2px;
   }
+  /* 状态色签：圆点颜色由 app.css 的 .card[data-status] .badge-dot 规则按状态注入 */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    align-self: start;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 1px 8px 1px 6px;
+    font-size: 11px;
+    line-height: 1.6;
+    color: var(--muted);
+    background: var(--col);
+  }
+  .badge-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--muted);
+    display: inline-block;
+  }
   .title {
     font-weight: 600;
     overflow-wrap: anywhere;
@@ -135,12 +165,9 @@
     color: var(--muted);
     font-size: 12px;
   }
-  .sr-status {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
+  /* 逐秒递增时不因数字宽度变化抖动 */
+  .dur {
+    font-variant-numeric: tabular-nums;
   }
   .card.inflight {
     opacity: 0.6;

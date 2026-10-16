@@ -122,6 +122,19 @@ button.ghost:hover {
   border-left: 3px solid var(--muted);
   opacity: 0.85;
 }
+/* 卡片状态色签圆点：与左缘色带、泳道头圆点同源 */
+.card[data-status="analyzing"] .badge-dot,
+.card[data-status="executing"] .badge-dot {
+  background: var(--accent);
+}
+.card[data-status="analysis_confirm"] .badge-dot,
+.card[data-status="completion_confirm"] .badge-dot {
+  background: var(--warn);
+}
+.card[data-status="done"] .badge-dot {
+  background: var(--muted);
+  opacity: 0.6;
+}
 
 /* 拖拽全局视觉 */
 .drag-ghost {
