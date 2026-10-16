@@ -36,7 +36,7 @@ const MIME: Record<string, string> = {
 
 export function createServer(
   store: Store,
-  opts: { port: number; token: string; webDir: string; primary: boolean; logs?: () => readonly string[] },
+  opts: { port: number; token: string; webDir: string; primary: boolean; projectID: string; logs?: () => readonly string[] },
 ): ServerHandle {
   const { token, webDir } = opts
 
@@ -80,7 +80,7 @@ export function createServer(
   async function api(req: Request, pathname: string): Promise<Response> {
     const method = req.method
     if (pathname === "/api/health") {
-      return Response.json({ ok: true, primary: opts.primary })
+      return Response.json({ ok: true, primary: opts.primary, projectID: opts.projectID })
     }
     if (pathname === "/api/logs") {
       return Response.json({ logs: opts.logs?.() ?? [] })

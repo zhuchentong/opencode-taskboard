@@ -149,7 +149,7 @@ BoardSettings { requireAnalysisConfirm: boolean }   // 默认 false（自动进�
 |------|------|------|
 | GET | `/api/tasks` | 任务列表（updatedAt 倒序） |
 | POST | `/api/tasks` | 创建 `{ title, description? }` → planning |
-| PATCH | `/api/tasks/:id` | 改 `status/title/description/result`；确认/打回也走这里（`{ action: "confirm" \| "reject", comment? }`），服务端按 5.3 校验并维护 claim/评论 |
+| PATCH | `/api/tasks/:id` | 改 `status/title/description/result`；确认/打回/评论也走这里（`{ action: "confirm" \| "reject" \| "comment", comment? }`），服务端按 5.3 校验并维护 claim/评论 |
 | DELETE | `/api/tasks/:id` | 删除任务 |
 | GET/PUT | `/api/settings` | 读/写看板设置（`requireAnalysisConfirm`） |
 | GET | `/api/health` | `{ ok: true, primary: boolean, projectID }` |

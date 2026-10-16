@@ -17,6 +17,7 @@ function setup(store: Store) {
     token: "tok123",
     webDir: FIXDIR,
     primary: true,
+    projectID: "proj-test",
     logs: () => ["line-a", "line-b"],
   })
   started.push(handle)
@@ -120,7 +121,7 @@ describe("REST API", () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
     const base = setup(s)
     const h = await (await fetch(`${base}/api/health`)).json()
-    expect(h).toEqual({ ok: true, primary: true })
+    expect(h).toEqual({ ok: true, primary: true, projectID: "proj-test" })
     const l = await (await fetch(`${base}/api/logs`)).json()
     expect(l).toEqual({ logs: ["line-a", "line-b"] })
     const r = await fetch(`${base}/api/nope`)

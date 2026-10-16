@@ -113,15 +113,15 @@ button.ghost:hover { color: var(--text); }
 .card .actions { display: flex; gap: 6px; margin-top: 8px; }
 .card .actions button { flex: 1; padding: 4px 0; font-size: 12px; }
 
-#reject-dialog {
+#dialog, #edit-dialog {
   background: var(--col);
   color: var(--text);
   border: 1px solid var(--line);
   border-radius: 10px;
   min-width: 320px;
 }
-#reject-dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
-#reject-dialog textarea {
+#dialog::backdrop, #edit-dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+#dialog textarea, #edit-dialog textarea, #edit-dialog input {
   width: 100%;
   min-height: 80px;
   background: var(--bg);
@@ -130,4 +130,5 @@ button.ghost:hover { color: var(--text); }
   border-radius: 6px;
   padding: 8px;
 }
-#reject-dialog menu { display: flex; gap: 8px; justify-content: flex-end; margin: 8px 0 0; padding: 0; }
+#edit-dialog input { min-height: auto; }
+#dialog menu, #edit-dialog menu { display: flex; gap: 8px; justify-content: flex-end; margin: 8px 0 0; padding: 0; }

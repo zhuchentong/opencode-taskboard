@@ -15,10 +15,27 @@ const PORT_SCAN_TRIES = 20
  * - 基准端口被本插件主实例占用 → 次要实例（写操作经 clientStore 代理）
  * - 基准端口被其他服务占用 → 上移端口作为主实例
  */
+/** 仅当基准端口上确为本项目的主实例时，才降级为次要实例（跨项目一律上移端口当主实例） */
+export function shouldProxy(health: unknown, projectID: string): boolean {
+  const h = health as { ok?: boolean; projectID?: string } | null
+  return h?.ok === true && h.projectID === projectID
+}
+
+/** 依次执行注册；任一失败则停掉已绑定的服务并把异常上抛（避免僵尸端口） */
+export async function safeRegister(handle: { stop(): void }, fns: Array<() => Promise<unknown>>): Promise<void> {
+  try {
+    for (const f of fns) await f()
+  } catch (e) {
+    handle.stop()
+    throw e
+  }
+}
+
 async function arbitrate(opts: {
   port: number
   token: string
   webDir: string
+  projectID: string
   localStore: Store
   proxyStore: Store
   log: (m: string) => void
@@ -26,7 +43,14 @@ async function arbitrate(opts: {
 }): Promise<{ handle: ServerHandle; store: Store; primary: boolean; primaryPort: number }> {
   const tryBind = (p: number, store: Store, primary: boolean): ServerHandle | undefined => {
     try {
-      return createServer(store, { port: p, token: opts.token, webDir: opts.webDir, primary, logs: opts.logs })
+      return createServer(store, {
+        port: p,
+        token: opts.token,
+        webDir: opts.webDir,
+        primary,
+        projectID: opts.projectID,
+        logs: opts.logs,
+      })
     } catch {
       return undefined
     }
@@ -41,8 +65,8 @@ async function arbitrate(opts: {
   let secondary = false
   try {
     const res = await fetch(`http://127.0.0.1:${opts.port}/api/health`)
-    const health = (await res.json()) as { ok?: boolean }
-    secondary = health?.ok === true
+    const health = await res.json()
+    secondary = shouldProxy(health, opts.projectID)
   } catch {
     secondary = false
   }
@@ -101,6 +125,7 @@ export default Plugin.define({
       port,
       token,
       webDir,
+      projectID,
       localStore,
       proxyStore: clientStore(`http://127.0.0.1:${port}`, token),
       log,
@@ -108,8 +133,10 @@ export default Plugin.define({
     })
     log(`就绪：${arb.primary ? "主实例" : "次要实例"} board=http://127.0.0.1:${arb.primaryPort}/`)
 
-    await registerTools(ctx as never, arb.store)
-    await registerCommands(ctx as never, arb.store, { port: arb.primaryPort })
+    await safeRegister(arb.handle, [
+      () => registerTools(ctx as never, arb.store),
+      () => registerCommands(ctx as never, arb.store, { port: arb.primaryPort }),
+    ])
 
     return () => {
       arb.handle.stop()

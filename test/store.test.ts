@@ -170,6 +170,16 @@ describe("确认与打回（reject）", () => {
     expect(await codeOf(s.patch(t.id, { action: "confirm" }))).toBe("invalid_transition")
   })
 
+  test("comment 动作：不改状态追加用户评论；空评论拒绝；未知动作拒绝", async () => {
+    const s = S()
+    const t = await toStatus(s, await s.create({ title: "t" }), "analyzing")
+    const r = await s.patch(t.id, { action: "comment", comment: "补充信息：优先级高" })
+    expect(r.status).toBe("analyzing")
+    expect(r.comments).toEqual([{ author: "user", text: "补充信息：优先级高", createdAt: expect.any(Number) }])
+    expect(await codeOf(s.patch(t.id, { action: "comment" }))).toBe("comment_required")
+    expect(await codeOf(s.patch(t.id, { action: "nonsense" as never, comment: "x" }))).toBe("invalid_input")
+  })
+
   test("打回后可被再次认领，上一轮评论保留", async () => {
     const s = S()
     const t = await toStatus(s, await s.create({ title: "t" }), "completion_confirm")

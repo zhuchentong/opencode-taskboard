@@ -64,9 +64,10 @@ export function storageBackend(storage: CtxStorageLike, keyPrefix: string): KVBa
 const TASK_PREFIX = "task/"
 const SETTINGS_KEY = "settings/board"
 const CLAIM_STATES: ReadonlySet<Status> = new Set(["analyzing", "executing"])
-const CONFIRM_FROM: Record<"confirm" | "reject", ReadonlySet<Status>> = {
+const CONFIRM_FROM: Record<"confirm" | "reject" | "comment", ReadonlySet<Status>> = {
   confirm: new Set<Status>(["analysis_confirm", "completion_confirm"]),
   reject: new Set<Status>(["analysis_confirm", "completion_confirm"]),
+  comment: new Set<Status>(["planning", "pending", "analyzing", "analysis_confirm", "executing", "completion_confirm", "done"]),
 }
 
 export interface Store {
@@ -181,12 +182,20 @@ export function createStore(
           throw new StoreError("invalid_input", "action 与 status 不能同时提供")
         }
 
-        if (p.action === "confirm" || p.action === "reject") {
+        if (p.action !== undefined && p.action !== "confirm" && p.action !== "reject" && p.action !== "comment") {
+          throw new StoreError("invalid_input", `未知操作：${String(p.action)}`)
+        }
+
+        if (p.action === "confirm" || p.action === "reject" || p.action === "comment") {
           if (!CONFIRM_FROM[p.action].has(task.status)) {
             throw new StoreError("invalid_transition", `当前状态 ${task.status} 不能执行 ${p.action}`)
           }
           if (p.action === "confirm") {
             next.status = task.status === "analysis_confirm" ? "executing" : "done"
+          } else if (p.action === "comment") {
+            const comment = (p.comment ?? "").trim()
+            if (!comment) throw new StoreError("comment_required", "评论内容不能为空")
+            next.comments.push({ author: "user", text: comment, createdAt: now })
           } else {
             const comment = (p.comment ?? "").trim()
             if (!comment) throw new StoreError("comment_required", "打回必须附评论")

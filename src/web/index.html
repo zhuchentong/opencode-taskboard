@@ -19,18 +19,29 @@
   </label>
 </header>
 <main id="board"></main>
-<dialog id="reject-dialog">
-  <form id="reject-form">
-    <h3>打回任务</h3>
-    <p>任务将回到「待领取」列，打回原因会作为评论保留。</p>
-    <textarea id="reject-comment" placeholder="打回原因（必填）" required></textarea>
+<dialog id="dialog">
+  <form id="dialog-form">
+    <h3 id="dialog-title">打回任务</h3>
+    <p id="dialog-hint">任务将回到「待领取」列，原因会作为评论保留。</p>
+    <textarea id="dialog-comment" placeholder="打回原因（必填，将作为评论保留）" required></textarea>
     <menu>
-      <button type="button" id="reject-cancel">取消</button>
-      <button type="submit" id="reject-ok" class="danger">打回</button>
+      <button type="button" id="dialog-cancel">取消</button>
+      <button type="submit" id="dialog-ok" class="danger">确定</button>
+    </menu>
+  </form>
+</dialog>
+<dialog id="edit-dialog">
+  <form id="edit-form">
+    <h3>编辑任务</h3>
+    <input id="edit-title" placeholder="标题（必填）" required>
+    <textarea id="edit-desc" placeholder="描述"></textarea>
+    <menu>
+      <button type="button" id="edit-cancel">取消</button>
+      <button type="submit">保存</button>
     </menu>
   </form>
 </dialog>
 <script>window.__TASKBOARD_TOKEN__ = "__TASKBOARD_TOKEN_VALUE__";</script>
-<script src="/app.js"></script>
+<script type="module" src="/app.js"></script>
 </body>
 </html>

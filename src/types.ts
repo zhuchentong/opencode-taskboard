@@ -58,6 +58,6 @@ export interface TaskPatch {
   status?: Status
   title?: string
   description?: string
-  action?: "confirm" | "reject"
+  action?: "confirm" | "reject" | "comment"
   comment?: string
 }
