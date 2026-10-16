@@ -44,6 +44,12 @@ function onPointerDown(e: PointerEvent) {
   const col = el.closest("[data-status]") as HTMLElement | null
   if (!col) return
   e.preventDefault()
+  // 指针捕获：拖出窗口后 pointerup 仍派发给页面，避免拖拽态卡死
+  try {
+    el.setPointerCapture(e.pointerId)
+  } catch {
+    /* 某些合成事件无 pointerId */
+  }
   start = {
     x: e.clientX,
     y: e.clientY,

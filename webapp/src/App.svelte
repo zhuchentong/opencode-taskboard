@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte"
   import { get } from "svelte/store"
-  import { cycleThemeMode, themeMode, initTheme, type ThemeMode } from "./theme"
-  import { fetchBoard, createTask, putSettings, patchTask, type ConnState } from "./lib/api"
+  import { cycleThemeMode, themeMode, type ThemeMode } from "./theme"
+  import { fetchBoard, createTask, putSettings, patchTask, deleteTask, type ConnState } from "./lib/api"
   import { applySnapshot, beginOptimistic, emptyState, settle, visibleTasks, type BoardState } from "./lib/optimistic"
   import { notify } from "./lib/notify"
   import { initDrag } from "./lib/drag.svelte"
@@ -75,7 +75,6 @@
   }
 
   onMount(() => {
-    initTheme()
     const unsub = themeMode.subscribe((m) => (mode = m))
     const uninitDrag = initDrag(handleDrop)
     const disposeEvents = connectEvents({
@@ -104,12 +103,13 @@
   }
 
   function handleToggle(requireAnalysisConfirm: boolean) {
-    // 乐观更新设置，失败回滚（applySnapshot 新对象引用触发重渲染）
+    // 乐观更新设置：先本地生效（新对象引用触发重渲染），失败回滚到原设置
     const prev = board.settings
+    board = applySnapshot(board, board.server, { ...prev, requireAnalysisConfirm })
     putSettings(requireAnalysisConfirm)
       .then(refresh)
       .catch((e) => {
-        board = applySnapshot(board, board.server, { ...prev })
+        board = applySnapshot(board, board.server, prev)
         notify("error", `设置失败：${e.message}`)
       })
   }

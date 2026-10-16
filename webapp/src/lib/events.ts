@@ -97,6 +97,7 @@ export function connectEvents(
   timers.push(deps.setInterval(pull, RECONCILE_SEC * 1000))
 
   return () => {
+    stopDegraded()
     es.close()
     for (const t of timers) deps.clearInterval(t)
   }

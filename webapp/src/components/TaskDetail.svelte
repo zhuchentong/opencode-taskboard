@@ -23,11 +23,14 @@
   let rejectOpen = $state(false)
   let rejectComment = $state("")
   let panel = $state<HTMLElement | null>(null)
+  let editing = $state(false) // 任一编辑器持有焦点时，快照不顶掉输入
 
-  // 外部快照更新时同步本地编辑态（编辑器尚未失火时跟随服务器值）
+  // 外部快照更新时同步本地编辑态；用户正在编辑则让路，失焦后由 onchange 提交或还原
   $effect(() => {
-    title = task.title
-    description = task.description
+    if (!editing) {
+      title = task.title
+      description = task.description
+    }
   })
 
   $effect(() => {
@@ -108,6 +111,11 @@
     <input
       bind:value={title}
       aria-label="任务标题"
+      onfocus={() => (editing = true)}
+      onblur={() => {
+        editing = false
+        saveTitle()
+      }}
       onkeydown={(e) => {
         if (e.key === "Escape") {
           title = task.title
@@ -124,6 +132,11 @@
       rows="3"
       bind:value={description}
       aria-label="任务描述"
+      onfocus={() => (editing = true)}
+      onblur={() => {
+        editing = false
+        saveDescription()
+      }}
       onkeydown={(e) => {
         if (e.key === "Escape") {
           description = task.description

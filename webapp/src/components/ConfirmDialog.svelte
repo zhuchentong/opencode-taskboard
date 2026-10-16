@@ -14,8 +14,9 @@
     if (open) {
       dlg?.showModal()
       okBtn?.focus()
-    } else {
-      dlg?.close()
+    } else if (dlg?.open) {
+      // 对未 open 的 <dialog> 调 close() 会抛 InvalidStateError
+      dlg.close()
     }
   })
 

@@ -135,14 +135,20 @@ describe("connectEvents", () => {
     expect(snap).toHaveLength(1)
   })
 
-  test("卸载：关闭 EventSource、清空定时器", () => {
+  test("卸载：关闭 EventSource、清空定时器（含降级轮询）", async () => {
     FakeES.instances = []
     const { handlers } = baseHandlers()
     const timers = fakeTimers()
-    const dispose = connectEvents(handlers, { EventSource: FakeES as never, setInterval: timers.set, clearInterval: timers.clear, setTimeout: timers.set, clearTimeout: timers.clear, fetchBoard: fakeFetch([]).fn })
-    expect(FakeES.instances).toHaveLength(1)
+    const f = fakeFetch([{ tasks: [], settings: { requireAnalysisConfirm: false } }])
+    const dispose = connectEvents(handlers, { EventSource: FakeES as never, setInterval: timers.set, clearInterval: timers.clear, setTimeout: timers.set, clearTimeout: timers.clear, fetchBoard: f.fn })
+    const es = FakeES.instances[0]
+    es.open()
+    es.fail()
+    es.fail()
+    es.fail() // 降级，启动 5s 轮询
+    expect(timers.regs.some((r) => r.ms === 5000 && !r.cleared)).toBe(true)
     dispose()
-    expect(FakeES.instances[0].closed).toBe(true)
+    expect(es.closed).toBe(true)
     expect(timers.regs.every((r) => r.cleared)).toBe(true)
   })
 })

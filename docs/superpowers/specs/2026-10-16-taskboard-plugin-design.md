@@ -184,7 +184,7 @@ BoardSettings { requireAnalysisConfirm: boolean }   // 默认 false（自动进�
 **技术栈**：Svelte 5（runes）+ Vite，源码在 `webapp/`，构建产物固定文件名输出到 `src/web/` 并提交入库（`bun run build:web`）。
 
 **交互与体验**：
-- 七列看板（列头带计数、空列提示、首载骨架屏），卡片 keyed 渲染 + 跨列 flip 动画
+- 七列看板（列头带计数、空列提示、首载骨架屏），卡片 keyed 渲染（跨列 flip 动画为后续打磨项，见台账 deferred）
 - **Pointer Events 自研拖拽**：拖影跟随、目标列高亮、插入位置指示（视觉层）；Agent 认领中的分析/执行任务禁止用户拖动
 - **乐观更新协议**：所有写本地立即生效（`beginOptimistic` 遮罩），SSE 快照回流不覆盖在途写，失败回滚到服务器最近快照并弹 toast；成功路径先应用快照再摘遮罩
 - **SSE 实时**：`GET /api/events` 订阅快照（免 token），断线自动重连，连续 3 次失败降级 5s 轮询 + 30s 对账轮询恒开；Header 连接状态点（live/reconnecting/polling）

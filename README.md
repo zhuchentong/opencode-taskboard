@@ -26,7 +26,7 @@ export default plugin
 
 ```bash
 bun install              # 根依赖
-bun test                 # 全量测试（81 例：服务端 + 前端纯函数）
+bun test                 # 全量测试（82 例：服务端 + 前端纯函数）
 bun run dev              # Mock 模式跑看板（内存后端，免 OpenCode）
 cd webapp && bun install # 前端构建链（svelte/vite，仅开发需要）
 bun run dev:web          # 前端 HMR（/api 代理到 4370）
