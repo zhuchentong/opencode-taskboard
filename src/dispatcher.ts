@@ -127,6 +127,7 @@ export function initDispatcher(
   let paused = false
   let lastEnabled = false
   let awaitingClaim = false // 单飞门：派发后到 claim 出现/检查到期前，不允许再派（防打断 worker）
+  let nudgedTaskIDs = new Set<string>() // 已发送「继续执行」提示的任务（防重复 nudge）
   let todayKey = ""
   let todayCount = 0
   let workerID: string | null = null
@@ -227,6 +228,18 @@ export function initDispatcher(
       const pendingCount = tasks.filter((t) => t.status === "pending").length
       // worker 忙 = 已有 claim 在身，或上一轮派发还在等待领取结果（单飞门，防打断）
       const workerBusy = awaitingClaim || (workerID ? tasks.some((t) => t.status !== "done" && t.claim?.sessionID === workerID) : false)
+
+      // 执行唤醒：worker 名下有 executing 任务且尚未 nudge 过 → 提示继续（分析确认放行后无人唤醒的缺口）
+      if (!workerID) workerID = ((await ctx.storage.get(SESSION_KEY)) as string | undefined) ?? null // 复水（重启后内存态丢失）
+      if (!awaitingClaim && workerID && todayCount <= DISPATCH_CAPS.dailyCap) {
+        const executing = tasks.filter((t) => t.status === "executing" && t.claim?.sessionID === workerID && !nudgedTaskIDs.has(t.id))
+        if (executing.length > 0) {
+          const t = executing[0]
+          nudgedTaskIDs.add(t.id)
+          await ctx.session.prompt({ sessionID: workerID, text: `看板任务「${t.title}」已放行进入执行。请继续完成它并用 taskboard_complete 提交；完成后停止。` })
+          deps.log(`执行唤醒 → worker=${workerID} task=${t.id}`)
+        }
+      }
 
       const v = shouldDispatch(
         {

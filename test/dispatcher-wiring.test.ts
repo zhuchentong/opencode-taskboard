@@ -126,6 +126,31 @@ describe("initDispatcher 接线", () => {
     h.d.dispose()
   }, 4000)
 
+  test("执行唤醒：analysis_confirm 放行后 executing 触发一次继续提示，不重复", async () => {
+    const h = harness({ claimCheckMs: 5_000 })
+    await h.store.setSettings({ autoDispatch: true, requireAnalysisConfirm: true })
+    const t = await toPending(h.store, "nudge-任务")
+    // 走 Agent 正常流转：claim → analyze（停在 analysis_confirm，claim 保留）
+    await h.store.claim({ id: t.id, sessionID: "ses_w1", agent: "build" })
+    await h.store.analyze({ id: t.id, sessionID: "ses_w1", analysis: "a" })
+    expect((await h.store.get(t.id)).status).toBe("analysis_confirm")
+    const promptsBefore = h.session.prompts.length
+    // 预置持久 worker 指针（生产中来自更早的派发；测试直接写入 storage）
+    await h.storage.set("p1/settings/dispatcher-session", "ses_w1")
+    // 用户在网页点「通过」→ executing
+    await h.store.patch(t.id, { action: "confirm" })
+    expect((await h.store.get(t.id)).claim?.sessionID).toBe("ses_w1") // 放行保留 claim（规则 #21）
+    h.fire()
+    await sleep(40)
+    expect(h.session.prompts.length).toBe(promptsBefore + 1)
+    expect(h.session.prompts.at(-1)!.text).toContain("已放行")
+    // 重复评估不重复 nudge
+    h.fire()
+    await sleep(40)
+    expect(h.session.prompts.length).toBe(promptsBefore + 1)
+    h.d.dispose()
+  })
+
   test("冷却窗口内重复写事件不重复派发；单飞门生效", async () => {
     const h = harness({ claimCheckMs: 5_000, minIntervalMs: 1 }) // 间隔守卫置 1ms，专测单飞门
     await toPending(h.store, "t1")
