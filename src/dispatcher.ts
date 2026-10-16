@@ -63,7 +63,6 @@ export function nextBackoffMs(failStreak: number, baseMs: number = DISPATCH_CAPS
 
 /* ============ 接线层 ============ */
 
-import { buildClaimPrompt } from "./commands"
 import type { Store } from "./store"
 
 /** ctx.session 的结构化子集（避免绑定具体 SDK 类型） */
@@ -71,6 +70,7 @@ export interface DispatcherSession {
   create(input?: { title?: string }): Promise<{ id: string }>
   get(input: { sessionID: string }): Promise<unknown>
   prompt(input: { sessionID: string; text: string }): Promise<unknown>
+  interrupt?(input: { sessionID: string }): Promise<unknown>
 }
 
 /** ctx.storage 的结构化子集 */
@@ -87,13 +87,17 @@ export type DispatcherStatus = {
   cooldownRemainMs: number
 }
 
-/** 派发提示词：复用 claim 闭环骨架，限定一次一个 */
+/** 派发提示词：直给最短路径，禁止技能/计划流程拖慢领取 */
 export function buildDispatchPrompt(): string {
   return [
-    "【自动派发】这是任务看板插件的后台自动派发，不是用户提问。",
-    "只领取并处理一个任务，完成提交后立即停止，不要继续领取下一个任务。",
+    "【自动派发】这是看板插件的后台自动任务。请直接行动，不要加载或执行任何 skill（跳过 executing-plans、TDD、worktree 等），不要创建计划文件或工作区。",
     "",
-    buildClaimPrompt(),
+    "第 1 步（立即执行）：调用 taskboard_claim 领取一个待领取任务——工具在代码工具目录 tools.taskboard.claim（找不到就在工具目录搜 taskboard）。",
+    "第 2 步：用 taskboard_analyze 提交简短分析与实施计划；若看板要求分析确认，领取返回的提示会说明，此时停下等待放行，不要继续。",
+    "第 3 步：按计划完成修改（小任务不必过度工程化）。",
+    "第 4 步：用 taskboard_complete 提交完成结果，任务进入完成确认。",
+    "",
+    "完成提交后立即停止，不要领取下一个任务。若领取失败（invalid_transition 等），等待即可，不要重试。",
   ].join("\n")
 }
 
@@ -157,6 +161,15 @@ export function initDispatcher(
 
   async function dispatch(): Promise<void> {
     const id = await ensureWorker()
+    // 上轮失败后的重试：先中断 worker 残留回合，避免新 prompt 以 steer 叠加打断产生半途状态
+    if (failStreak > 0 && ctx.session.interrupt) {
+      try {
+        await ctx.session.interrupt({ sessionID: id })
+        deps.log("重试前中断 worker 残留回合")
+      } catch {
+        // 无进行中回合时中断可能报错，忽略
+      }
+    }
     await ctx.session.prompt({ sessionID: id, text: buildDispatchPrompt() })
     lastDispatchAt = Date.now()
     awaitingClaim = true

@@ -18,13 +18,15 @@ describe("命令文本", () => {
     expect(text).toContain("taskboard_complete")
   })
 
-  test("buildDispatchPrompt 限定一次一个并复用闭环骨架", async () => {
+  test("buildDispatchPrompt 直给最短路径并禁止技能流程", async () => {
     const { buildDispatchPrompt } = await import("../src/dispatcher")
     const text = buildDispatchPrompt()
     expect(text).toContain("自动派发")
-    expect(text).toContain("只领取并处理一个任务")
-    expect(text).toContain("不要继续领取下一个")
-    expect(text).toContain("taskboard_claim") // 复用 buildClaimPrompt 骨架
+    expect(text).toContain("不要加载或执行任何 skill")
+    expect(text).toContain("taskboard_claim")
+    expect(text).toContain("taskboard_analyze")
+    expect(text).toContain("taskboard_complete")
+    expect(text).toContain("立即停止")
   })
 
   test("registerCommands 的 /taskboard 输出追加 dispatcherText", async () => {
