@@ -13,8 +13,8 @@
     onmove,
   }: {
     tasks: Task[]
-    pendingIds: Set<string>
-    flashIds: Set<string>
+    pendingIds: { has(id: string): boolean }
+    flashIds: { has(id: string): boolean }
     onopen: (task: Task) => void
     onconfirm?: (task: Task) => void
     onquickreject?: (task: Task) => void

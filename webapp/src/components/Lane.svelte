@@ -19,8 +19,8 @@
     label: string
     tasks: Task[]
     empty?: string
-    pendingIds: Set<string>
-    flashIds: Set<string>
+    pendingIds: { has(id: string): boolean }
+    flashIds: { has(id: string): boolean }
     onopen: (task: Task) => void
     onconfirm?: (task: Task) => void
     onquickreject?: (task: Task) => void
@@ -94,7 +94,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
-    min-height: 28px;
+    min-height: 40px;
   }
   .lane.drag-over {
     outline: 2px dashed var(--accent);

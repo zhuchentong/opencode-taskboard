@@ -59,7 +59,7 @@
   </div>
   <span class="spacer"></span>
   <div class="group-right">
-    <label class="toggle" title="开启后，Agent 提交分析将停在「分析确认」列等待放行">
+    <label class="toggle" title="开启后，Agent 提交分析将停在「分析确认」泳道等待放行">
       <input
         type="checkbox"
         checked={settings.requireAnalysisConfirm}

@@ -61,8 +61,15 @@ import { STATUSES } from "./lib/board"
     if (id) document.querySelector(`[data-task-id="${id}"]`)?.focus() // 焦点返还卡片
   }
 
-  // 统一写通道：乐观遮罩 → API → 快照落地后摘遮罩（settle 时序契约）
-  function writeTask(taskId: string, mask: Partial<Task>, apiPatch: Record<string, unknown>, failMsg: string) {
+  // 统一写通道：乐观遮罩 → API → 快照落地后摘遮罩（settle 时序契约）。
+  // silent：失败只红闪不弹 toast（快速通过等高频路径，避免重复轰炸）；红闪已表达失败+自动回滚
+  function writeTask(
+    taskId: string,
+    mask: Partial<Task>,
+    apiPatch: Record<string, unknown>,
+    failMsg: string,
+    silent = false,
+  ) {
     board = beginOptimistic(board, taskId, mask)
     patchTask(taskId, apiPatch)
       .then(async () => {
@@ -72,7 +79,7 @@ import { STATUSES } from "./lib/board"
       .catch((e) => {
         board = settle(board, taskId, false)
         flashFail(taskId)
-        notify("error", `${failMsg}：${friendlyError(e)}`)
+        if (!silent) notify("error", `${failMsg}：${friendlyError(e)}`)
       })
   }
 
@@ -106,10 +113,10 @@ import { STATUSES } from "./lib/board"
     }
   }
 
-  // 快速通过：确认列卡片一键放行（乐观通道）
+  // 快速通过：确认列卡片一键放行（乐观通道；失败静默红闪——双击重复操作高发，toast 会轰炸）
   function quickConfirm(task: Task) {
     const nextStatus = task.status === "analysis_confirm" ? "executing" : "done"
-    writeTask(task.id, { status: nextStatus }, { action: "confirm" }, "确认失败")
+    writeTask(task.id, { status: nextStatus }, { action: "confirm" }, "确认失败", true)
   }
 
   async function refresh() {

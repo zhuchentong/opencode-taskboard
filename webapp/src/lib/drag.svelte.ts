@@ -95,7 +95,7 @@ function onPointerMove(e: PointerEvent) {
   const status = col.dataset.status as Status
   drag.overStatus = status
   const cards = Array.from(col.querySelectorAll("[data-task-id]:not(.drag-ghost)")) as HTMLElement[]
-  drag.overIndex = insertIndex(cards.length, e.clientX, (i) => cards[i].getBoundingClientRect())
+  drag.overIndex = insertIndex(cards.length, e.clientX, e.clientY, (i) => cards[i].getBoundingClientRect())
 }
 
 function onPointerUp() {

@@ -18,8 +18,8 @@
     onconfirm?: (task: Task) => void
     /** 确认列快速打回：打开详情面板并展开打回表单 */
     onquickreject?: (task: Task) => void
-    pendingIds?: Set<string>
-    flashIds?: Set<string>
+    pendingIds?: { has(id: string): boolean }
+    flashIds?: { has(id: string): boolean }
     /** 键盘跨泳道移动（方向 -1 上 / +1 下） */
     onmove?: (task: Task, dir: -1 | 1) => void
   } = $props()
@@ -57,7 +57,7 @@
   onclick={() => onopen(task)}
   onkeydown={(e) => {
     if (e.key === "Enter") onopen(task)
-    if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown") && draggable && onmove) {
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === "ArrowUp" || e.key === "ArrowDown") && draggable && onmove) {
       e.preventDefault()
       onmove(task, e.key === "ArrowUp" ? -1 : 1)
     }
