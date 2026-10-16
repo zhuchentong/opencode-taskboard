@@ -143,8 +143,28 @@ export default Plugin.define({
     let dispatcher: ReturnType<typeof initDispatcher> | null = null
     if (arb.primary) {
       dispatcher = initDispatcher(
-        { session: ctx.session as never, storage: ctx.storage, projectID },
-        { store: arb.store, log, onWrite: (fn) => (hooks.onWrite = fn) },
+        {
+          session: ctx.session as never,
+          storage: ctx.storage,
+          projectID,
+          // worker 会话必须在项目目录里工作；不传 location 会回退到服务进程 cwd
+          // （实测曾落到 .debug/playground，worker 根本不在用户项目里）
+          directory: ctx.location.directory,
+        },
+        {
+          store: arb.store,
+          log,
+          onWrite: (fn) => (hooks.onWrite = fn),
+          // recordUsage 走 store 层、不经 HTTP 路由，故 emitSnapshot 不会触发；
+          // 消耗统计要上看板必须由这里显式广播快照
+          broadcast: async () => {
+            await arb.handle.emit({
+              type: "snapshot",
+              tasks: await arb.store.list(),
+              settings: await arb.store.getSettings(),
+            })
+          },
+        },
       )
     }
 

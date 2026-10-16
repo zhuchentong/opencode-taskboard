@@ -18,15 +18,27 @@ describe("命令文本", () => {
     expect(text).toContain("taskboard_complete")
   })
 
-  test("buildDispatchPrompt 直给最短路径并禁止技能流程", async () => {
+  test("buildDispatchPrompt 放开工作流、锁定任务并保留停止约定", async () => {
     const { buildDispatchPrompt } = await import("../src/dispatcher")
-    const text = buildDispatchPrompt()
+    const text = buildDispatchPrompt({ id: "task_abc123", title: "重构登录模块" })
     expect(text).toContain("自动派发")
-    expect(text).toContain("不要加载或执行任何 skill")
     expect(text).toContain("taskboard_claim")
     expect(text).toContain("taskboard_analyze")
     expect(text).toContain("taskboard_complete")
     expect(text).toContain("立即停止")
+    // 预分配任务：并发下 worker 不自己去抢，避免多 worker 抢同一批任务
+    expect(text).toContain("task_abc123")
+    expect(text).toContain("重构登录模块")
+    // 放开工作流：压制性措辞必须消失
+    expect(text).not.toContain("不要加载或执行任何 skill")
+    expect(text).not.toContain("skill")
+    expect(text).not.toContain("worktree")
+    expect(text).not.toContain("不要创建计划文件")
+    expect(text).not.toContain("直接行动")
+    // 新引导语：如实评估复杂度后自行选择工作流
+    expect(text).toContain("如实评估")
+    expect(text).toContain("复杂")
+    expect(text).toContain("按任务本身的需要")
   })
 
   test("registerCommands 的 /taskboard 输出追加 dispatcherText", async () => {
