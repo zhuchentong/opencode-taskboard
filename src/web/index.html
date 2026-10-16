@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>任务看板</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>📋 任务看板</h1>
+  <form id="new-task">
+    <input id="new-title" placeholder="新任务标题，回车创建（进入待规划）" autocomplete="off" required>
+    <input id="new-desc" placeholder="描述（可选）" autocomplete="off">
+    <button type="submit">创建</button>
+  </form>
+  <label class="setting" title="开启后：分析完成后停在「分析确认」列，需人工放行才进入执行中">
+    <input type="checkbox" id="require-analysis"> 分析需人工确认
+  </label>
+</header>
+<main id="board"></main>
+<dialog id="reject-dialog">
+  <form id="reject-form">
+    <h3>打回任务</h3>
+    <p>任务将回到「待领取」列，打回原因会作为评论保留。</p>
+    <textarea id="reject-comment" placeholder="打回原因（必填）" required></textarea>
+    <menu>
+      <button type="button" id="reject-cancel">取消</button>
+      <button type="submit" id="reject-ok" class="danger">打回</button>
+    </menu>
+  </form>
+</dialog>
+<script>window.__TASKBOARD_TOKEN__ = "__TASKBOARD_TOKEN_VALUE__";</script>
+<script src="/app.js"></script>
+</body>
+</html>

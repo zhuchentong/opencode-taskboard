@@ -70,7 +70,7 @@ export function createServer(
       return Response.json({ error: { code: "not_found", message: "文件不存在" } }, { status: 404 })
     }
     if (rel === "index.html") {
-      const html = (await f.text()).replaceAll("__TASKBOARD_TOKEN__", token)
+      const html = (await f.text()).replaceAll("__TASKBOARD_TOKEN_VALUE__", token)
       return new Response(html, { headers: { "Content-Type": MIME[".html"] } })
     }
     const ext = rel.slice(rel.lastIndexOf(".")).toLowerCase()

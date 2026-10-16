@@ -220,14 +220,18 @@ describe("工具操作代理路由", () => {
 describe("静态页", () => {
   test("GET / 注入 token；不存在文件 404 JSON", async () => {
     mkdirSync(FIXDIR, { recursive: true })
-    writeFileSync(`${FIXDIR}/index.html`, "<html>TOKEN=__TASKBOARD_TOKEN__</html>")
+    writeFileSync(
+      `${FIXDIR}/index.html`,
+      '<html><script>window.__TASKBOARD_TOKEN__ = "__TASKBOARD_TOKEN_VALUE__";</script>TOKEN=__TASKBOARD_TOKEN_VALUE__</html>',
+    )
     try {
       const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
       const base = setup(s)
       const r = await fetch(`${base}/`)
       const body = await r.text()
+      expect(body).toContain('window.__TASKBOARD_TOKEN__ = "tok123"')
       expect(body).toContain("TOKEN=tok123")
-      expect(body).not.toContain("__TASKBOARD_TOKEN__")
+      expect(body).not.toContain("__TASKBOARD_TOKEN_VALUE__")
 
       const r2 = await fetch(`${base}/no-such.js`)
       expect(r2.status).toBe(404)
