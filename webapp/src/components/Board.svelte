@@ -1,7 +1,7 @@
 <script lang="ts">
   import { STATUSES, STATUS_LABELS, groupByStatus } from "../lib/board"
   import type { Task } from "../lib/types"
-  import Column from "./Column.svelte"
+  import Lane from "./Lane.svelte"
 
   let {
     tasks,
@@ -16,6 +16,12 @@
 
 <main class="board">
   {#each STATUSES as status (status)}
-    <Column status={status} label={STATUS_LABELS[status]} tasks={groups[status]} {onopen} />
+    <Lane
+      status={status}
+      label={STATUS_LABELS[status]}
+      tasks={groups[status]}
+      empty={status === "planning" ? "看板空空如也——点击右上「＋新建任务」创建第一张卡片" : ""}
+      {onopen}
+    />
   {/each}
 </main>

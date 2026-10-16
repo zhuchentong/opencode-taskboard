@@ -1,5 +1,6 @@
 import type { Action } from "svelte/action"
 import type { Status } from "./types"
+import { insertIndex } from "./lane"
 
 /**
  * Pointer 拖拽控制器（Svelte 5 runes 模块状态）。
@@ -80,7 +81,7 @@ function onPointerMove(e: PointerEvent) {
   ghost?.style.setProperty("transform", `translate(${e.clientX + 10}px, ${e.clientY + 10}px)`)
 
   const stack = document.elementsFromPoint(e.clientX, e.clientY) as HTMLElement[]
-  const col = stack.find((n) => n.dataset?.status && n.classList.contains("column"))
+  const col = stack.find((n) => n.dataset?.status && n.classList.contains("lane"))
   if (!col) {
     drag.overStatus = null
     drag.overIndex = null
@@ -89,15 +90,7 @@ function onPointerMove(e: PointerEvent) {
   const status = col.dataset.status as Status
   drag.overStatus = status
   const cards = Array.from(col.querySelectorAll("[data-task-id]:not(.drag-ghost)")) as HTMLElement[]
-  let idx = cards.length
-  for (let i = 0; i < cards.length; i++) {
-    const r = cards[i].getBoundingClientRect()
-    if (e.clientY < r.top + r.height / 2) {
-      idx = i
-      break
-    }
-  }
-  drag.overIndex = idx
+  drag.overIndex = insertIndex(cards.length, e.clientX, (i) => cards[i].getBoundingClientRect())
 }
 
 function onPointerUp() {

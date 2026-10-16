@@ -66,6 +66,8 @@
     display: grid;
     gap: 6px;
     font-size: 13px;
+    width: 240px;
+    align-content: start;
   }
   .card:hover,
   .card:focus-visible {

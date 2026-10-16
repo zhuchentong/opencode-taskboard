@@ -87,34 +87,14 @@ button.ghost:hover {
   flex: 1;
 }
 
-/* ============ 布局壳：七列看板 ============ */
+/* ============ 布局壳：竖直泳道 ============ */
 .board {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(168px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   padding: 12px 16px;
-  align-items: start;
-}
-
-.column {
-  background: var(--col);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  min-height: 200px;
-  padding: 8px;
-}
-.column h2 {
-  font-size: 13px;
-  margin: 2px 4px 8px;
-  color: var(--muted);
-  font-weight: 600;
-}
-.column .empty {
-  color: var(--muted);
-  font-size: 12px;
-  text-align: center;
-  padding: 24px 0;
-  opacity: 0.75;
+  max-width: 1280px;
+  margin: 0 auto;
 }
 
 /* 拖拽全局视觉 */

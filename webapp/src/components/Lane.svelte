@@ -7,11 +7,14 @@
     status,
     label,
     tasks,
+    empty,
     onopen,
   }: {
     status: Status
     label: string
     tasks: Task[]
+    /** 空泳道引导文案（仅 planning 用） */
+    empty?: string
     onopen: (task: Task) => void
   } = $props()
 
@@ -19,10 +22,10 @@
   const dropIndex = $derived(isOver ? drag.overIndex : null)
 </script>
 
-<section class="column" class:drag-over={isOver} data-status={status}>
-  <h2>{label}<span class="count">{tasks.length}</span></h2>
+<section class="lane" class:drag-over={isOver} data-status={status}>
+  <h2><span class="dot"></span>{label}<span class="count">{tasks.length}</span></h2>
   {#if tasks.length === 0 && !isOver}
-    <p class="empty">暂无任务</p>
+    <p class="empty">{empty ?? ""}</p>
   {:else}
     <div class="cards">
       {#each tasks as task, i (task.id)}
@@ -39,12 +42,11 @@
 </section>
 
 <style>
-  .column {
+  .lane {
     background: var(--col);
     border: 1px solid var(--line);
     border-radius: 10px;
-    padding: 10px;
-    min-height: 60vh;
+    padding: 10px 12px;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -57,6 +59,12 @@
     align-items: center;
     gap: 6px;
   }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+  }
   .count {
     background: var(--line);
     color: var(--muted);
@@ -68,21 +76,26 @@
     color: var(--muted);
     font-size: 12px;
     opacity: 0.7;
-    margin: 4px 0;
+    margin: 0;
+    min-height: 20px;
+    display: flex;
+    align-items: center;
   }
   .cards {
     display: flex;
-    flex-direction: column;
-    gap: 8px;
+    flex-wrap: wrap;
+    gap: 10px;
+    min-height: 28px;
   }
-  .column.drag-over {
+  .lane.drag-over {
     outline: 2px dashed var(--accent);
     outline-offset: -2px;
   }
+  /* 横向流内的插入指示：竖线 */
   .drop-line {
-    height: 2px;
-    border-radius: 1px;
+    width: 3px;
+    align-self: stretch;
+    border-radius: 2px;
     background: var(--accent);
-    margin: -3px 0;
   }
 </style>

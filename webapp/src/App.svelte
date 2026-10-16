@@ -158,18 +158,30 @@
 
 <style>
   .skeleton {
-    display: grid;
-    grid-template-columns: repeat(7, minmax(168px, 1fr));
+    display: flex;
+    flex-direction: column;
     gap: 10px;
+    padding: 12px 16px;
+    max-width: 1280px;
+    margin: 0 auto;
   }
   .skel-col {
     background: var(--col);
     border: 1px solid var(--line);
     border-radius: 10px;
-    padding: 10px;
-    display: grid;
-    gap: 8px;
-    align-content: start;
+    padding: 10px 12px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .skel-head {
+    height: 14px;
+    width: 88px;
+    border-radius: 6px;
+  }
+  .skel-card {
+    height: 72px;
+    width: 240px;
   }
   .skel-head,
   .skel-card {
@@ -177,13 +189,6 @@
     background: linear-gradient(100deg, var(--line) 40%, var(--card) 50%, var(--line) 60%);
     background-size: 200% 100%;
     animation: shimmer 1.2s infinite;
-  }
-  .skel-head {
-    height: 14px;
-    width: 60%;
-  }
-  .skel-card {
-    height: 72px;
   }
   @keyframes shimmer {
     to {
