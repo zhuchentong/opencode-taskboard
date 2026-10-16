@@ -9,13 +9,16 @@
     tasks,
     empty,
     onopen,
+    onconfirm,
+    onquickreject,
   }: {
     status: Status
     label: string
     tasks: Task[]
-    /** 空泳道引导文案（仅 planning 用） */
     empty?: string
     onopen: (task: Task) => void
+    onconfirm?: (task: Task) => void
+    onquickreject?: (task: Task) => void
   } = $props()
 
   const isOver = $derived(drag.overStatus === status && drag.draggingId !== null)
@@ -32,7 +35,7 @@
         {#if dropIndex === i}
           <div class="drop-line" aria-hidden="true"></div>
         {/if}
-        <Card {task} {onopen} />
+        <Card {task} {onopen} {onconfirm} {onquickreject} />
       {/each}
       {#if dropIndex === tasks.length}
         <div class="drop-line" aria-hidden="true"></div>

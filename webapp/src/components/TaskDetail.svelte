@@ -9,19 +9,23 @@
     onclose,
     onwrite,
     ondelete,
+    initialReject,
   }: {
     task: Task
     onclose: () => void
     /** 统一写通道：onwrite(taskId, 乐观遮罩, API patch, 失败提示前缀) */
     onwrite: (taskId: string, mask: Partial<Task>, apiPatch: Record<string, unknown>, failMsg: string) => void
     ondelete: (taskId: string) => void
+    /** 打开时直接展开打回表单（卡片快速打回入口） */
+    initialReject?: boolean
   } = $props()
 
   let title = $state(task.title)
   let description = $state(task.description)
   let comment = $state("")
-  let rejectOpen = $state(false)
+  let rejectOpen = $state(!!initialReject)
   let rejectComment = $state("")
+  let rejectInput = $state<HTMLTextAreaElement | null>(null)
   let panel = $state<HTMLElement | null>(null)
   let editing = $state(false) // 任一编辑器持有焦点时，快照不顶掉输入
 
@@ -35,6 +39,7 @@
 
   $effect(() => {
     panel?.focus()
+    if (initialReject) rejectInput?.focus()
   })
 
   const CONFIRM_COLS = ["analysis_confirm", "completion_confirm"]
@@ -182,7 +187,11 @@
 
   {#if rejectOpen}
     <div class="reject-form" transition:fly={{ y: 8, duration: 120 }}>
-      <textarea placeholder="打回原因（必填，将作为评论保留）" rows="2" bind:value={rejectComment}></textarea>
+      <textarea
+        bind:this={rejectInput}
+        placeholder="打回原因（必填，将作为评论保留）"
+        rows="2"
+        bind:value={rejectComment}></textarea>
       <div class="row">
         <button class="ghost" onclick={() => (rejectOpen = false)}>取消</button>
         <button class="danger" disabled={!rejectComment.trim()} onclick={reject}>打回</button>

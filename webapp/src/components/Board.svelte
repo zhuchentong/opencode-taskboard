@@ -6,9 +6,13 @@
   let {
     tasks,
     onopen,
+    onconfirm,
+    onquickreject,
   }: {
     tasks: Task[]
     onopen: (task: Task) => void
+    onconfirm?: (task: Task) => void
+    onquickreject?: (task: Task) => void
   } = $props()
 
   const groups = $derived(groupByStatus(tasks))
@@ -22,6 +26,8 @@
       tasks={groups[status]}
       empty={status === "planning" ? "看板空空如也——点击右上「＋新建任务」创建第一张卡片" : ""}
       {onopen}
+      {onconfirm}
+      {onquickreject}
     />
   {/each}
 </main>

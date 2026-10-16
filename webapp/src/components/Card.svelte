@@ -6,9 +6,15 @@
   let {
     task,
     onopen,
+    onconfirm,
+    onquickreject,
   }: {
     task: Task
     onopen: (task: Task) => void
+    /** 确认列快速通过（乐观通道，失败 toast 由 App 负责） */
+    onconfirm?: (task: Task) => void
+    /** 确认列快速打回：打开详情面板并展开打回表单 */
+    onquickreject?: (task: Task) => void
   } = $props()
 
   const claimText = $derived(
@@ -23,6 +29,9 @@
     !(task.claim && task.claim.agent !== "human" && (task.status === "analyzing" || task.status === "executing")),
   )
   const isDragging = $derived(drag.draggingId === task.id)
+  const canConfirm = $derived(
+    (task.status === "analysis_confirm" || task.status === "completion_confirm") && (onconfirm || onquickreject),
+  )
 </script>
 
 <article
@@ -54,6 +63,22 @@
     {#if task.comments.length > 0}<span>💬 {task.comments.length}</span>{/if}
   </div>
   <span class="sr-status">{STATUS_LABELS[task.status]}</span>
+  {#if canConfirm}
+    <div class="quick" role="toolbar" aria-label="快速操作">
+      <button
+        class="quick-ok"
+        onclick={(e) => {
+          e.stopPropagation()
+          onconfirm?.(task)
+        }}>通过</button>
+      <button
+        class="quick-reject"
+        onclick={(e) => {
+          e.stopPropagation()
+          onquickreject?.(task)
+        }}>打回</button>
+    </div>
+  {/if}
 </article>
 
 <style>
@@ -100,5 +125,28 @@
     height: 1px;
     overflow: hidden;
     clip: rect(0 0 0 0);
+  }
+  .quick {
+    display: none;
+    gap: 6px;
+  }
+  .card:hover .quick,
+  .card:focus-within .quick {
+    display: flex;
+  }
+  .quick button {
+    border: none;
+    border-radius: 6px;
+    padding: 3px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .quick-ok {
+    background: var(--ok);
+    color: #fff;
+  }
+  .quick-reject {
+    background: var(--danger);
+    color: #fff;
   }
 </style>

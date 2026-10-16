@@ -25,17 +25,25 @@
   let loaded = $state(false)
   let mode = $state<ThemeMode>(get(themeMode))
   let detailId = $state<string | null>(null)
+  let detailInitialReject = $state(false)
 
   const visible = $derived(visibleTasks(board))
   const detailTask = $derived(detailId ? (visible.find((t) => t.id === detailId) ?? null) : null)
 
   function openDetail(task: Task) {
+    detailInitialReject = false
+    detailId = task.id
+  }
+
+  function quickReject(task: Task) {
+    detailInitialReject = true
     detailId = task.id
   }
 
   function closeDetail() {
     const id = detailId
     detailId = null
+    detailInitialReject = false
     if (id) document.querySelector(`[data-task-id="${id}"]`)?.focus() // 焦点返还卡片
   }
 
@@ -57,11 +65,20 @@
   async function removeTask(taskId: string) {
     try {
       await deleteTask(taskId)
-      if (detailId === taskId) detailId = null
+      if (detailId === taskId) {
+        detailId = null
+        detailInitialReject = false
+      }
       refresh()
     } catch (e) {
       notify("error", `删除失败：${e.message}`)
     }
+  }
+
+  // 快速通过：确认列卡片一键放行（乐观通道）
+  function quickConfirm(task: Task) {
+    const nextStatus = task.status === "analysis_confirm" ? "executing" : "done"
+    writeTask(task.id, { status: nextStatus }, { action: "confirm" }, "确认失败")
   }
 
   async function refresh() {
@@ -135,7 +152,7 @@
 />
 
 {#if loaded}
-  <Board tasks={visible} onopen={openDetail} />
+  <Board tasks={visible} onopen={openDetail} onconfirm={quickConfirm} onquickreject={quickReject} />
 {:else}
   <main class="board skeleton" aria-label="加载中">
     {#each Array(7) as _, i (i)}
@@ -150,7 +167,13 @@
 {/if}
 
 {#if detailTask}
-  <TaskDetail task={detailTask} onclose={closeDetail} onwrite={writeTask} ondelete={removeTask} />
+  <TaskDetail
+    task={detailTask}
+    onclose={closeDetail}
+    onwrite={writeTask}
+    ondelete={removeTask}
+    initialReject={detailInitialReject}
+  />
 {/if}
 
 <Toasts />
