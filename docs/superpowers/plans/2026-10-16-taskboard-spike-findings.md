@@ -93,3 +93,10 @@ export default plugin
 - 测试：85 例全绿（+3 例 insertIndex 横向插入判定，drag 命中选择器同步改 `lane`）
 - 真实冒烟：SMOKE-12-V-OK（产物含 lane 标记、快速通过 API 链路 completion_confirm→done、task_9b7a9652 留完成确认列供人工体验）
 - 失败提示分工：快速通过失败静默红闪（双击高发防 toast 轰炸），其余路径红闪+toast
+
+## 自动派发器 Spike（2026-10-16，计划 2026-10-16-auto-dispatcher.md Task 1）
+
+- `ctx.session.create({ title })` 在插件 setup 内可用，返回 SessionInfo（含 id）
+- `session.prompt({ sessionID, text })` 不指定 delivery 即入队 user 消息并触发 Agent 执行：约 0.5s 返回消息对象（fire-and-forget 友好），`session.wait({ sessionID })` 阻塞至空闲（实测 3.5s，含真实模型调用），`context` 返回 3 条消息（含 assistant 回复）
+- 消息对象顶层是 `type`（user/assistant）而非 `role`
+- 结论：自动派发器可按计划实现，无需降级「提醒器」；会话持久性由 dispatcher 的 get-失效重建路径兜底
