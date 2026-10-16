@@ -96,10 +96,17 @@
     writeTask(taskId, { status: toStatus }, { status: toStatus }, "移动失败")
   }
 
-  function handleCreate(title: string, description: string) {
-    createTask(title, description || undefined)
-      .then(refresh)
-      .catch((e) => notify("error", `创建失败：${e.message}`))
+  function handleCreate(title: string, description: string): Promise<void> {
+    // 成功返回 resolve（弹窗关闭清空）；失败 reject（弹窗保留输入），错误提示走 toast
+    return createTask(title, description || undefined)
+      .then((t) => {
+        refresh()
+        notify("success", `任务已创建（${t.id}）`)
+      })
+      .catch((e) => {
+        notify("error", `创建失败：${e.message}`)
+        throw e
+      })
   }
 
   function handleToggle(requireAnalysisConfirm: boolean) {
