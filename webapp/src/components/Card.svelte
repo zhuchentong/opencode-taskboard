@@ -1,8 +1,9 @@
 <script lang="ts">
   import { STATUS_LABELS, timeAgo } from "../lib/board"
   import { cardDrag, drag } from "../lib/drag.svelte"
-  import { formatPhaseLine, formatPhaseTooltip } from "../lib/duration"
+  import { formatClock, formatDuration, formatPhaseLine, formatPhaseTooltip, queueWaitMs } from "../lib/duration"
   import { ticker } from "../lib/ticker.svelte"
+  import { formatTokens, totalTokens } from "../lib/usage"
   import type { Task } from "../lib/types"
 
   let {
@@ -46,6 +47,18 @@
   // 两段计时：进行中的段随 ticker 逐秒递增；绝对时间走悬浮提示
   const phaseLine = $derived(formatPhaseLine(task, ticker.now))
   const phaseTitle = $derived(formatPhaseTooltip(task, ticker.now))
+  // 消耗总量（无快照则不显示该行）；随 task prop 变化，无需额外状态
+  const usageLine = $derived(task.usage ? `📊 ${formatTokens(totalTokens(task.usage))}` : "")
+  // 排队时长：仅「待领取」显示，让「在排队」与「派发出故障」一眼可辨
+  const queueLine = $derived.by(() => {
+    const ms = queueWaitMs(task, ticker.now)
+    return ms === null ? "" : `⏳ 排队 ${formatDuration(ms)}`
+  })
+  const queueTitle = $derived.by(() => {
+    const ms = queueWaitMs(task, ticker.now)
+    if (ms === null) return ""
+    return `进入待领取：${formatClock(task.pendingAt ?? task.createdAt, ticker.now)}`
+  })
 </script>
 
 <article
@@ -58,7 +71,7 @@
   role="button"
   aria-label={`查看任务：${task.title}`}
   data-draggable={draggable ? "yes" : "no"}
-  title={phaseTitle || undefined}
+  title={[phaseTitle, queueTitle].filter(Boolean).join("\n") || undefined}
   use:cardDrag={task.id}
   onclick={() => onopen(task)}
   onkeydown={(e) => {
@@ -84,6 +97,8 @@
   {/if}
   <div class="meta">
     {#if phaseLine}<span class="dur">{phaseLine}</span>{/if}
+    {#if queueLine}<span class="dur queue">{queueLine}</span>{/if}
+    {#if usageLine}<span class="dur">{usageLine}</span>{/if}
     <span>{timeAgo(task.updatedAt)}</span>
     {#if claimText}<span>{claimText}</span>{/if}
     {#if task.comments.length > 0}<span>💬 {task.comments.length}</span>{/if}
@@ -168,6 +183,10 @@
   /* 逐秒递增时不因数字宽度变化抖动 */
   .dur {
     font-variant-numeric: tabular-nums;
+  }
+  /* 排队中等「在等」而非「在跑」，用警示色与计时/消耗区分 */
+  .queue {
+    color: var(--warn);
   }
   .card.inflight {
     opacity: 0.6;

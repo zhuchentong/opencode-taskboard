@@ -2,7 +2,7 @@
  * 秒级心跳（Svelte 5 runes 模块状态）：驱动「当前执行时长」实时递增。
  * 组件直接 $derived 消费 ticker.now，无需经 props 传递。
  *
- * 启停由 App 依 hasRunningSpan 判定：没有任务在跑时定时器停摆，不空转。
+ * 启停由 App 依 needsTicker 判定：无进行中计时、无待领取排队任务时定时器停摆，不空转。
  */
 
 export const ticker = $state({ now: Date.now() })

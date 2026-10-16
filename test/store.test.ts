@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createStore, memoryBackend, storageBackend } from "../src/store"
-import { StoreError, type Status, type Store, type Task } from "../src/types"
+import { StoreError, type Status, type Store, type Task, type TaskUsage } from "../src/types"
 
 const S = (requireAnalysisConfirm = false) => createStore(memoryBackend(), { requireAnalysisConfirm })
 
@@ -493,5 +493,109 @@ describe("两段计时（spans）接入各写路径", () => {
     const t = await toStatus(s, await s.create({ title: "t" }), "executing")
     const r = await s.updateNotes({ id: t.id, sessionID: "s1", result: "50%" })
     expect(r.spans?.executing).toEqual(t.spans?.executing)
+  })
+})
+
+describe("recordUsage", () => {
+  const U = (over: Partial<TaskUsage> = {}): TaskUsage => ({
+    input: 100,
+    output: 200,
+    reasoning: 300,
+    cacheRead: 400,
+    cacheWrite: 500,
+    at: 1_700_000_000_000,
+    ...over,
+  })
+
+  test("写入后可读回，五个计量字段与快照时间完整", async () => {
+    const s = S()
+    const t = await s.create({ title: "t" })
+    const usage = U()
+    const r = await s.recordUsage({ id: t.id, usage })
+    expect(r.usage).toEqual(usage)
+    expect((await s.get(t.id)).usage).toEqual(usage)
+  })
+
+  test("不刷新 updatedAt：消耗回写不惊动看板按更新时间的排序", async () => {
+    const s = S()
+    const t = await s.create({ title: "t" })
+    const baseline = (await s.patch(t.id, { title: "改名" })).updatedAt
+    // 让时钟真正走一格：否则「刷新 updatedAt」的写法会因同毫秒而假通过
+    await Bun.sleep(5)
+    const r = await s.recordUsage({ id: t.id, usage: U() })
+    expect(r.updatedAt).toBe(baseline)
+    expect((await s.get(t.id)).updatedAt).toBe(baseline)
+  })
+
+  test("不改动其他字段：状态/计时/claim 原样保留", async () => {
+    const s = S()
+    const t = await toStatus(s, await s.create({ title: "t" }), "executing")
+    const r = await s.recordUsage({ id: t.id, usage: U() })
+    expect(r.status).toBe(t.status)
+    expect(r.claim).toEqual(t.claim)
+    expect(r.spans).toEqual(t.spans)
+  })
+
+  test("任务不存在 → not_found", async () => {
+    const s = S()
+    expect(await codeOf(s.recordUsage({ id: "nope", usage: U() }))).toBe("not_found")
+  })
+
+  test("可覆盖写：连续两次以后者为准", async () => {
+    const s = S()
+    const t = await s.create({ title: "t" })
+    await s.recordUsage({ id: t.id, usage: U({ input: 1 }) })
+    const r = await s.recordUsage({ id: t.id, usage: U({ input: 9 }) })
+    expect(r.usage?.input).toBe(9)
+  })
+
+  test("已有 usage 的任务再写 → 整体替换而非字段合并", async () => {
+    const s = S()
+    const t = await s.create({ title: "t" })
+    await s.recordUsage({ id: t.id, usage: U({ input: 5, output: 6 }) })
+    // 只带部分字段：若实现是「合并」，上一次的 reasoning/cacheRead 会残留
+    const partial = { input: 1, output: 2, at: 42 } as TaskUsage
+    const r = await s.recordUsage({ id: t.id, usage: partial })
+    expect(r.usage).toEqual(partial)
+    expect(Object.keys(r.usage!).sort()).toEqual(["at", "input", "output"])
+  })
+})
+
+describe("pendingAt（排队计时起点）", () => {
+  test("拖入 pending 时记录 pendingAt", async () => {
+    const s = S()
+    const t = await s.create({ title: "t" })
+    expect(t.pendingAt).toBeUndefined()
+    await Bun.sleep(5)
+    const r = await s.patch(t.id, { status: "pending" })
+    expect(r.pendingAt).toBeGreaterThan(t.createdAt)
+  })
+
+  test("已在 pending 改标题 → 不重置 pendingAt", async () => {
+    const s = S()
+    const t = await s.patch((await s.create({ title: "t" })).id, { status: "pending" })
+    await Bun.sleep(5)
+    const r = await s.patch(t.id, { title: "改名" })
+    expect(r.pendingAt).toBe(t.pendingAt)
+  })
+
+  test("打回 pending → 重开一轮排队计时", async () => {
+    const s = S(true) // 需分析确认，任务才真停在 analysis_confirm 可被打回
+    const t2 = await toStatus(s, await s.create({ title: "t2" }), "analysis_confirm")
+    const first = await s.patch(t2.id, { status: "pending" }) // 拖回 pending，开第一轮
+    expect(first.pendingAt).toBeGreaterThan(0)
+    await Bun.sleep(5)
+    const t3 = await toStatus(s, await s.create({ title: "t3" }), "analysis_confirm")
+    const back = await s.patch(t3.id, { action: "reject", comment: "重来" })
+    expect(back.status).toBe("pending")
+    expect(back.pendingAt).toBeGreaterThan(first.pendingAt)
+  })
+
+  test("claim 离开 pending → 保留 pendingAt 作为历史", async () => {
+    const s = S()
+    const t = await toStatus(s, await s.create({ title: "t" }), "pending")
+    expect(t.pendingAt).toBeGreaterThan(0)
+    const claimed = await s.claim({ id: t.id, sessionID: "s1", agent: "build" })
+    expect(claimed.pendingAt).toBe(t.pendingAt)
   })
 })

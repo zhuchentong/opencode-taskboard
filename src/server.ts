@@ -215,7 +215,7 @@ export function createServer(
       await emitSnapshot()
       return Response.json(claimed)
     }
-    const opMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/(analyze|complete|release|notes)$/)
+    const opMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/(analyze|complete|release|notes|usage)$/)
     if (opMatch && method === "POST") {
       const bad = guard(req)
       if (bad) return bad
@@ -236,6 +236,11 @@ export function createServer(
           break
         case "release":
           task = await store.release({ id, sessionID })
+          break
+        case "usage":
+          // 消耗统计：主实例由派发器直连 store 回写（不经本路由），
+          // 此处只为次要实例的代理链保持 Store 接口完整
+          task = await store.recordUsage({ id, usage: body.usage as Task["usage"] })
           break
         default:
           task = await store.updateNotes({

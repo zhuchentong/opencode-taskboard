@@ -1,5 +1,5 @@
 import { transitionSpans } from "./spans"
-import { StoreError, type BoardSettings, type Status, type Task, type TaskPatch } from "./types"
+import { StoreError, type BoardSettings, type Status, type Task, type TaskPatch, type TaskUsage } from "./types"
 
 export interface KVBackend {
   get(key: string): Promise<unknown | undefined>
@@ -84,6 +84,11 @@ export interface Store {
   complete(input: { id: string; sessionID: string; result?: string }): Promise<Task>
   release(input: { id: string; sessionID: string }): Promise<Task>
   updateNotes(input: { id: string; sessionID: string; analysis?: string; result?: string }): Promise<Task>
+  /**
+   * 回写 token 消耗快照。与 patch 的根本区别：**不刷新 updatedAt** ——
+   * 消耗是纯计量数据，刷新它会让正在执行的任务无端跳到看板顶部。
+   */
+  recordUsage(input: { id: string; usage: TaskUsage }): Promise<Task>
 }
 
 export function createStore(
@@ -221,6 +226,8 @@ export function createStore(
 
         // 人工流转（拖拽/键盘移动/确认/打回）同样驱动两段计时；只改标题描述时内部自动跳过
         transitionSpans(task, next, now)
+        // 进入「待领取」即开新一轮排队计时（拖入 / 打回 / 放弃回 pending）；已在 pending 不重置
+        if (next.status === "pending" && task.status !== "pending") next.pendingAt = now
         next.updatedAt = now
         await backend.set(TASK_PREFIX + id, next)
         return next
@@ -341,6 +348,16 @@ export function createStore(
         if (input.analysis !== undefined) next.analysis = input.analysis
         if (input.result !== undefined) next.result = input.result
         await backend.set(TASK_PREFIX + next.id, next)
+        return next
+      })
+    },
+
+    recordUsage(input) {
+      return serialized(async () => {
+        const task = await readTask(input.id) // 不存在 → not_found
+        // 整体替换计量快照；刻意不带 updatedAt（见 Store 接口注释）
+        const next: Task = { ...task, usage: input.usage }
+        await backend.set(TASK_PREFIX + input.id, next)
         return next
       })
     },

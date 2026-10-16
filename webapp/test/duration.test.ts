@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { PHASE_LABELS, formatClock, formatDuration, formatPhaseLine, formatPhaseTooltip, hasRunningSpan, phaseViews } from "../src/lib/duration"
+import { PHASE_LABELS, formatClock, formatDuration, formatPhaseLine, formatPhaseTooltip, hasRunningSpan, needsTicker, phaseViews, queueWaitMs } from "../src/lib/duration"
 import type { Status, Task } from "../src/lib/types"
 
-const T = (status: Status, spans?: Task["spans"]): Task => ({
+const T = (status: Status, spans?: Task["spans"], over?: Partial<Task>): Task => ({
   id: "task_x",
   title: "t",
   description: "",
@@ -11,6 +11,7 @@ const T = (status: Status, spans?: Task["spans"]): Task => ({
   createdAt: 1,
   updatedAt: 1,
   ...(spans ? { spans } : {}),
+  ...over,
 })
 
 const NOW = new Date("2026-10-16T15:42:30").getTime()
@@ -162,5 +163,39 @@ describe("hasRunningSpan（心跳开关）", () => {
 
   test("残缺段不算进行中", () => {
     expect(hasRunningSpan(T("executing", { executing: {} as never }))).toBe(false)
+  })
+})
+
+describe("queueWaitMs（排队时长）", () => {
+  test("pending 用 pendingAt 计时", () => {
+    expect(queueWaitMs(T("pending", undefined, { pendingAt: NOW - 200_000 }), NOW)).toBe(200_000)
+  })
+
+  test("老任务无 pendingAt → 回落 createdAt", () => {
+    expect(queueWaitMs(T("pending", undefined, { createdAt: NOW - 60_000 }), NOW)).toBe(60_000)
+  })
+
+  test("非 pending 状态返回 null（不显示排队时长）", () => {
+    expect(queueWaitMs(T("analyzing", undefined, { pendingAt: NOW - 1000 }), NOW)).toBeNull()
+    expect(queueWaitMs(T("done", undefined, { pendingAt: NOW - 1000 }), NOW)).toBeNull()
+  })
+
+  test("时钟回拨 / 未来时间 → 归零不显负数", () => {
+    expect(queueWaitMs(T("pending", undefined, { pendingAt: NOW + 50_000 }), NOW)).toBe(0)
+  })
+})
+
+describe("needsTicker（心跳开关）", () => {
+  test("待领取任务需要心跳（排队时长逐秒递增）", () => {
+    expect(needsTicker(T("pending"))).toBe(true)
+  })
+
+  test("有进行中计时段需要心跳", () => {
+    expect(needsTicker(T("executing", { executing: { startedAt: 1 } }))).toBe(true)
+  })
+
+  test("终态任务无在途计时与排队 → 停摆", () => {
+    expect(needsTicker(T("done"))).toBe(false)
+    expect(needsTicker(T("analysis_confirm", { analyzing: { startedAt: 1, endedAt: 2 } }))).toBe(false)
   })
 })

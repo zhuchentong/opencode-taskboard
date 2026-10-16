@@ -7,7 +7,7 @@
 import { STATUSES } from "./lib/board"
   import { notify } from "./lib/notify"
   import { initDrag } from "./lib/drag.svelte"
-  import { hasRunningSpan } from "./lib/duration"
+  import { needsTicker } from "./lib/duration"
   import { startTicker, stopTicker } from "./lib/ticker.svelte"
   import { connectEvents } from "./lib/events"
   import Header from "./components/Header.svelte"
@@ -152,7 +152,7 @@ import { STATUSES } from "./lib/board"
   // 心跳：仅当存在进行中的计时段时才每秒跳动（无任务在跑则停摆，不空转）。
   // 依赖 visible，随 SSE 快照自动起停。
   $effect(() => {
-    if (visible.some((t) => hasRunningSpan(t))) startTicker()
+    if (visible.some((t) => needsTicker(t))) startTicker()
     else stopTicker()
   })
 

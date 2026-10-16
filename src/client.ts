@@ -81,5 +81,8 @@ export function clientStore(base: string, token: string): Store {
         result: input.result,
       })
     },
+    async recordUsage(input) {
+      return post(`/api/tasks/${encodeURIComponent(input.id)}/usage`, { usage: input.usage })
+    },
   }
 }

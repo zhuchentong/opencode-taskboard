@@ -67,6 +67,17 @@ export function hasRunningSpan(task: Task): boolean {
   })
 }
 
+/** 排队时长：仅「待领取」有意义；老任务无 pendingAt 时回落 createdAt；时钟回拨归零 */
+export function queueWaitMs(task: Task, now: number): number | null {
+  if (task.status !== "pending") return null
+  return Math.max(0, now - (task.pendingAt ?? task.createdAt))
+}
+
+/** 心跳判据：进行中的计时段，或待领取任务（排队时长需逐秒递增） */
+export function needsTicker(task: Task): boolean {
+  return task.status === "pending" || hasRunningSpan(task)
+}
+
 /** 卡片 meta 行的单行文案：「分析 2m30s · 执行 1m00s…」，进行中的段带省略号；无记录返回空串 */
 export function formatPhaseLine(task: Task, now: number): string {
   return phaseViews(task, now)

@@ -26,6 +26,17 @@ export interface PhaseSpan {
   endedAt?: number
 }
 
+/** 任务累计的 token 消耗快照（由派发器在会话结束时回写；缺字段按 0 计） */
+export interface TaskUsage {
+  input: number
+  output: number
+  reasoning: number
+  cacheRead: number
+  cacheWrite: number
+  /** 快照时间 */
+  at: number
+}
+
 export interface Task {
   id: string
   title: string
@@ -35,6 +46,10 @@ export interface Task {
   result?: string
   comments: TaskComment[]
   claim?: Claim
+  /** 进入「待领取」的时刻（排队计时起点）；老任务缺省时回落 createdAt */
+  pendingAt?: number
+  /** token 消耗快照；无字段表示尚未记录（旧任务或消耗尚未回写） */
+  usage?: TaskUsage
   /** 分析段/执行段各自的时间区间；无字段表示尚未记录（旧任务或尚未开工） */
   spans?: Partial<Record<"analyzing" | "executing", PhaseSpan>>
   createdAt: number

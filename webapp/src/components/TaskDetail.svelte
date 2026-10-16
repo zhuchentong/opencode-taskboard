@@ -1,10 +1,11 @@
 <script lang="ts">
   import { fade, fly } from "svelte/transition"
   import { STATUS_LABELS, timeAgo } from "../lib/board"
-  import { formatClock, formatDuration, phaseViews } from "../lib/duration"
+  import { formatClock, formatDuration, phaseViews, queueWaitMs } from "../lib/duration"
   import { ticker } from "../lib/ticker.svelte"
   import { confirmDialog } from "../lib/notify"
-  import type { Task } from "../lib/types"
+  import { formatTokens, totalTokens } from "../lib/usage"
+  import type { Task, TaskUsage } from "../lib/types"
   import Markdown from "./Markdown.svelte"
 
   let {
@@ -49,6 +50,15 @@
   const canConfirm = $derived(CONFIRM_COLS.includes(task.status))
   // 两段计时明细；进行中的段随心跳逐秒递增
   const views = $derived(phaseViews(task, ticker.now))
+  const queueMs = $derived(queueWaitMs(task, ticker.now))
+  // 消耗明细行（顺序即展示顺序）；合计单列一行
+  const USAGE_ROWS: { key: keyof Omit<TaskUsage, "at">; label: string }[] = [
+    { key: "input", label: "输入 input" },
+    { key: "output", label: "输出 output" },
+    { key: "reasoning", label: "推理 reasoning" },
+    { key: "cacheRead", label: "缓存读 cache read" },
+    { key: "cacheWrite", label: "缓存写 cache write" },
+  ]
 
   function saveTitle() {
     const v = title.trim()
@@ -168,6 +178,9 @@
   <div class="meta">
     <span>创建 {timeAgo(task.createdAt)}</span>
     <span>更新 {timeAgo(task.updatedAt)}</span>
+    {#if queueMs !== null}
+      <span>⏳ 排队中 {formatDuration(queueMs)}（{formatClock(task.pendingAt ?? task.createdAt)} 起）</span>
+    {/if}
     {#if task.claim}
       <span>
         {task.claim.agent === "human"
@@ -198,6 +211,32 @@
               <td class="num">{v.running ? `已 ${formatDuration(v.duration)}` : formatDuration(v.duration)}</td>
             </tr>
           {/each}
+        </tbody>
+      </table>
+    </section>
+  {/if}
+
+  {#if task.usage}
+    <section class="timing">
+      <h3>消耗</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>项目</th>
+            <th>token</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each USAGE_ROWS as row (row.key)}
+            <tr>
+              <td>{row.label}</td>
+              <td class="num">{formatTokens(task.usage[row.key])}</td>
+            </tr>
+          {/each}
+          <tr>
+            <td>合计</td>
+            <td class="num">{formatTokens(totalTokens(task.usage))}</td>
+          </tr>
         </tbody>
       </table>
     </section>
