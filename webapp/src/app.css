@@ -1,0 +1,118 @@
+/* ============ 主题变量 ============ */
+/* 暗色为默认基准（沿用上一版看板色板）；[data-theme] 由 theme.ts 写入 html 元素 */
+:root,
+[data-theme="dark"] {
+  --bg: #0f1115;
+  --col: #171a21;
+  --card: #1f2430;
+  --card-hover: #262c3a;
+  --line: #2a303e;
+  --text: #e6e9ef;
+  --muted: #9aa3b2;
+  --accent: #5b8cff;
+  --ok: #3fb96b;
+  --warn: #e0a13c;
+  --danger: #e05c5c;
+}
+
+[data-theme="light"] {
+  --bg: #f4f6fa;
+  --col: #ffffff;
+  --card: #ffffff;
+  --card-hover: #eef2f9;
+  --line: #d7dde7;
+  --text: #1c2430;
+  --muted: #667084;
+  --accent: #3b6fe0;
+  --ok: #2e9e57;
+  --warn: #b97f1e;
+  --danger: #d04848;
+}
+
+/* ============ 基础 ============ */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+button:hover {
+  filter: brightness(1.1);
+}
+button.ghost {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+button.ghost:hover {
+  color: var(--text);
+  filter: none;
+}
+
+/* ============ 布局壳：Header ============ */
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 5;
+}
+.app-header h1 {
+  font-size: 16px;
+  margin: 0;
+  white-space: nowrap;
+}
+.app-header .note {
+  color: var(--muted);
+  font-size: 12px;
+}
+.app-header .spacer {
+  flex: 1;
+}
+
+/* ============ 布局壳：七列看板 ============ */
+.board {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(168px, 1fr));
+  gap: 10px;
+  padding: 12px 16px;
+  align-items: start;
+}
+
+.column {
+  background: var(--col);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  min-height: 200px;
+  padding: 8px;
+}
+.column h2 {
+  font-size: 13px;
+  margin: 2px 4px 8px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.column .empty {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  padding: 24px 0;
+  opacity: 0.75;
+}
