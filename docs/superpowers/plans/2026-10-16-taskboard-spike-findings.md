@@ -100,3 +100,15 @@ export default plugin
 - `session.prompt({ sessionID, text })` 不指定 delivery 即入队 user 消息并触发 Agent 执行：约 0.5s 返回消息对象（fire-and-forget 友好），`session.wait({ sessionID })` 阻塞至空闲（实测 3.5s，含真实模型调用），`context` 返回 3 条消息（含 assistant 回复）
 - 消息对象顶层是 `type`（user/assistant）而非 `role`
 - 结论：自动派发器可按计划实现，无需降级「提醒器」；会话持久性由 dispatcher 的 get-失效重建路径兜底
+
+## 自动派发器集成验收记录（2026-10-16，计划 2026-10-16-auto-dispatcher.md Task 6）
+
+- 全链路实证（playground 真实环境，free 模型 worker）：autoDispatch 开 → pending 任务自动派发 → worker（持久会话）经 code-mode 工具领取 → analyze → requireAnalysisConfirm=true 时停在 analysis_confirm → **用户网页放行 → 执行唤醒自动 prompt worker → complete 至 completion_confirm → 用户确认 done**（task_056a97d5 全程日志可查）
+- 自动续链 ✓：worker 完成提交后 dispatcher 识别其空闲，自动派发队列中下一个 pending（task_03925c31 → analyzing）
+- 关开关 ✓：autoDispatch=false 后 25s 内新 pending 任务无人领取、无派发日志
+- 控制机制实证：单飞门（awaitingClaim 期间跳过 worker-busy）、60s claim 检查触发连败与 60s 冷却、日计数持久化
+- 验收中发现并修复的两个关键缺陷：
+  1. 无单飞门时重复派发每 ~12s 打断 worker（60s 检查被重置永不触发，退避熔断全失效）——修复 awaitingClaim 门控（d3bd502）
+  2. 分析确认放行后无人唤醒 worker——修复执行唤醒 nudge（fb5502e）；顺带确认规则：drag 进确认列清 claim 是人类接管的既有设计，放行走 action confirm 保留 claim
+- 提示词教训：worker 会话继承全局 superpowers 技能，会把派发当计划先加载一堆 skill——派发 prompt 必须明令「直接行动、跳过 skill、第一步就 claim」（e733e71）；free 模型全程慢（领取约 60-90s），claim 检查 60s 属临界但冷却重试可兜底
+- 风险实锤与遗留：worker 拥有全量工具（本次它自行创建 worktree 并移动了自己的会话）——下一轮建议在派发 prompt 中约束「不要创建 worktree/不要移动会话」，或考虑 worker 会话限权
