@@ -1,11 +1,22 @@
 import { join } from "node:path"
 import { StoreError } from "./types"
-import type { Store } from "./types"
+import type { BoardSettings, Store, Task } from "./types"
+
+export type ServerEvent = { type: "hello" } | { type: "snapshot"; tasks: Task[]; settings: BoardSettings }
 
 export interface ServerHandle {
   server: Bun.Server
   actualPort: number
   stop(): void
+  emit(event: ServerEvent): void
+}
+
+const SSE_HEARTBEAT_MS = 25_000
+const MAX_SSE_SUBSCRIBERS = 32
+
+type Subscriber = {
+  controller: ReadableStreamDefaultController<Uint8Array>
+  heartbeat: ReturnType<typeof setInterval>
 }
 
 const STATUS_BY_CODE: Record<string, number> = {
@@ -59,6 +70,77 @@ export function createServer(
     }
   }
 
+  const encoder = new TextEncoder()
+  const subscribers = new Set<Subscriber>()
+
+  const sseFrame = (event: ServerEvent): Uint8Array => encoder.encode(`data: ${JSON.stringify(event)}\n\n`)
+
+  function removeSubscriber(sub: Subscriber): void {
+    if (!subscribers.delete(sub)) return
+    clearInterval(sub.heartbeat)
+    try {
+      sub.controller.close()
+    } catch {
+      // 流已被客户端取消
+    }
+  }
+
+  function emit(event: ServerEvent): void {
+    for (const sub of subscribers) {
+      try {
+        sub.controller.enqueue(sseFrame(event))
+      } catch {
+        removeSubscriber(sub)
+      }
+    }
+  }
+
+  async function emitSnapshot(): Promise<void> {
+    emit({ type: "snapshot", tasks: await store.list(), settings: await store.getSettings() })
+  }
+
+  function handleEvents(req: Request): Response {
+    if (subscribers.size >= MAX_SSE_SUBSCRIBERS) {
+      return Response.json(
+        { error: { code: "too_many_subscribers", message: "事件流订阅已达上限，请稍后重试" } },
+        { status: 503 },
+      )
+    }
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        controller = c
+      },
+      cancel() {
+        removeSubscriber(sub)
+      },
+    })
+    const sub: Subscriber = {
+      controller,
+      heartbeat: setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(": ping\n\n"))
+        } catch {
+          removeSubscriber(sub)
+        }
+      }, SSE_HEARTBEAT_MS),
+    }
+    subscribers.add(sub)
+    req.signal.addEventListener("abort", () => removeSubscriber(sub))
+    void (async () => {
+      try {
+        controller.enqueue(sseFrame({ type: "hello" }))
+        await emitSnapshot()
+      } catch {
+        removeSubscriber(sub)
+      }
+    })()
+    if (req.signal.aborted) removeSubscriber(sub)
+    return new Response(stream, {
+      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+    })
+  }
+
   async function serveStatic(pathname: string): Promise<Response> {
     const rel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "")
     const file = join(webDir, rel)
@@ -71,10 +153,12 @@ export function createServer(
     }
     if (rel === "index.html") {
       const html = (await f.text()).replaceAll("__TASKBOARD_TOKEN_VALUE__", token)
-      return new Response(html, { headers: { "Content-Type": MIME[".html"] } })
+      return new Response(html, { headers: { "Content-Type": MIME[".html"], "Cache-Control": "no-cache" } })
     }
     const ext = rel.slice(rel.lastIndexOf(".")).toLowerCase()
-    return new Response(f, { headers: { "Content-Type": MIME[ext] ?? "application/octet-stream" } })
+    return new Response(f, {
+      headers: { "Content-Type": MIME[ext] ?? "application/octet-stream", "Cache-Control": "no-cache" },
+    })
   }
 
   async function api(req: Request, pathname: string): Promise<Response> {
@@ -85,12 +169,16 @@ export function createServer(
     if (pathname === "/api/logs") {
       return Response.json({ logs: opts.logs?.() ?? [] })
     }
+    if (pathname === "/api/events" && method === "GET") {
+      return handleEvents(req)
+    }
     if (pathname === "/api/settings") {
       if (method === "GET") return Response.json(await store.getSettings())
       if (method === "PUT") {
         const bad = guard(req)
         if (bad) return bad
         await store.setSettings((await readJson(req)) as never)
+        await emitSnapshot()
         return Response.json(await store.getSettings())
       }
     }
@@ -101,6 +189,7 @@ export function createServer(
         if (bad) return bad
         const body = await readJson(req)
         const task = await store.create({ title: String(body.title ?? ""), description: body.description as string | undefined })
+        await emitSnapshot()
         return Response.json(task, { status: 201 })
       }
     }
@@ -108,13 +197,13 @@ export function createServer(
       const bad = guard(req)
       if (bad) return bad
       const body = await readJson(req)
-      return Response.json(
-        await store.claim({
-          id: typeof body.id === "string" ? body.id : undefined,
-          sessionID: String(body.sessionID ?? ""),
-          agent: typeof body.agent === "string" ? body.agent : "agent",
-        }),
-      )
+      const claimed = await store.claim({
+        id: typeof body.id === "string" ? body.id : undefined,
+        sessionID: String(body.sessionID ?? ""),
+        agent: typeof body.agent === "string" ? body.agent : "agent",
+      })
+      await emitSnapshot()
+      return Response.json(claimed)
     }
     const opMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/(analyze|complete|release|notes)$/)
     if (opMatch && method === "POST") {
@@ -123,25 +212,31 @@ export function createServer(
       const body = await readJson(req)
       const id = decodeURIComponent(opMatch[1])
       const sessionID = String(body.sessionID ?? "")
+      let task: Task
       switch (opMatch[2]) {
         case "analyze":
-          return Response.json(await store.analyze({ id, sessionID, analysis: String(body.analysis ?? "") }))
+          task = await store.analyze({ id, sessionID, analysis: String(body.analysis ?? "") })
+          break
         case "complete":
-          return Response.json(
-            await store.complete({ id, sessionID, result: typeof body.result === "string" ? body.result : undefined }),
-          )
+          task = await store.complete({
+            id,
+            sessionID,
+            result: typeof body.result === "string" ? body.result : undefined,
+          })
+          break
         case "release":
-          return Response.json(await store.release({ id, sessionID }))
-        case "notes":
-          return Response.json(
-            await store.updateNotes({
-              id,
-              sessionID,
-              analysis: typeof body.analysis === "string" ? body.analysis : undefined,
-              result: typeof body.result === "string" ? body.result : undefined,
-            }),
-          )
+          task = await store.release({ id, sessionID })
+          break
+        default:
+          task = await store.updateNotes({
+            id,
+            sessionID,
+            analysis: typeof body.analysis === "string" ? body.analysis : undefined,
+            result: typeof body.result === "string" ? body.result : undefined,
+          })
       }
+      await emitSnapshot()
+      return Response.json(task)
     }
     const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/)
     if (taskMatch) {
@@ -149,12 +244,15 @@ export function createServer(
       if (method === "PATCH") {
         const bad = guard(req)
         if (bad) return bad
-        return Response.json(await store.patch(id, (await readJson(req)) as never))
+        const task = await store.patch(id, (await readJson(req)) as never)
+        await emitSnapshot()
+        return Response.json(task)
       }
       if (method === "DELETE") {
         const bad = guard(req)
         if (bad) return bad
         await store.remove(id)
+        await emitSnapshot()
         return Response.json({ ok: true })
       }
     }
@@ -180,5 +278,6 @@ export function createServer(
     server,
     actualPort: server.port,
     stop: () => server.stop(true),
+    emit,
   }
 }
