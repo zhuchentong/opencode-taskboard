@@ -2,8 +2,9 @@
   import { onMount } from "svelte"
   import { get } from "svelte/store"
   import { cycleThemeMode, themeMode, type ThemeMode } from "./theme"
-  import { fetchBoard, createTask, putSettings, patchTask, deleteTask, type ConnState } from "./lib/api"
+  import { fetchBoard, createTask, putSettings, patchTask, deleteTask, BoardApiError, type ConnState } from "./lib/api"
   import { applySnapshot, beginOptimistic, emptyState, settle, visibleTasks, type BoardState } from "./lib/optimistic"
+import { STATUSES } from "./lib/board"
   import { notify } from "./lib/notify"
   import { initDrag } from "./lib/drag.svelte"
   import { connectEvents } from "./lib/events"
@@ -71,8 +72,24 @@
       .catch((e) => {
         board = settle(board, taskId, false)
         flashFail(taskId)
-        notify("error", `${failMsg}：${e.message}`)
+        notify("error", `${failMsg}：${friendlyError(e)}`)
       })
+  }
+
+  // 乐观协议失败大多源于「状态已被他端改变」——把 invalid_transition 翻译成人话
+  function friendlyError(e: unknown): string {
+    if (e instanceof BoardApiError && e.code === "invalid_transition") {
+      return "任务状态已被其他操作改变（例如 Agent 刚领取），请稍后刷新再试"
+    }
+    return e instanceof Error ? e.message : String(e)
+  }
+
+  // 键盘跨泳道移动：状态序 ±1，首尾截停；与拖拽同一乐观通道
+  function moveTask(task: Task, dir: -1 | 1) {
+    const i = STATUSES.indexOf(task.status)
+    const next = STATUSES[i + dir]
+    if (!next) return
+    writeTask(task.id, { status: next }, { status: next }, "移动失败")
   }
 
   // 删除：await 后由 SSE 广播的快照自动刷新看板（服务端删除也会 emit snapshot）
@@ -166,7 +183,15 @@
 />
 
 {#if loaded}
-  <Board tasks={visible} pendingIds={board.pending} flashIds={flashIds} onopen={openDetail} onconfirm={quickConfirm} onquickreject={quickReject} />
+  <Board
+    tasks={visible}
+    pendingIds={board.pending}
+    flashIds={flashIds}
+    onopen={openDetail}
+    onconfirm={quickConfirm}
+    onquickreject={quickReject}
+    onmove={moveTask}
+  />
 {:else}
   <main class="board skeleton" aria-label="加载中">
     {#each Array(7) as _, i (i)}

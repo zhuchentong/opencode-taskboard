@@ -80,6 +80,11 @@ function onPointerMove(e: PointerEvent) {
   drag.y = e.clientY
   ghost?.style.setProperty("transform", `translate(${e.clientX + 10}px, ${e.clientY + 10}px)`)
 
+  // 视口上下缘自动纵滚（竖直泳道页面可能很长）
+  const EDGE = 80
+  if (e.clientY < EDGE) window.scrollBy(0, -14)
+  else if (e.clientY > window.innerHeight - EDGE) window.scrollBy(0, 14)
+
   const stack = document.elementsFromPoint(e.clientX, e.clientY) as HTMLElement[]
   const col = stack.find((n) => n.dataset?.status && n.classList.contains("lane"))
   if (!col) {

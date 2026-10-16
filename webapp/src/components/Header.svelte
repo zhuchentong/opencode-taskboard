@@ -53,21 +53,25 @@
 </script>
 
 <header class="app-header">
-  <h1>任务看板</h1>
-  <button class="new-btn" onclick={openCreate}>＋ 新建任务</button>
-  <label class="toggle" title="开启后，Agent 提交分析将停在「分析确认」列等待放行">
-    <input
-      type="checkbox"
-      checked={settings.requireAnalysisConfirm}
-      onchange={(e) => ontoggle(e.currentTarget.checked)}
-    />
-    分析需人工确认
-  </label>
+  <div class="group-left">
+    <h1>任务看板</h1>
+    <button class="new-btn" onclick={openCreate}>＋ 新建任务</button>
+  </div>
   <span class="spacer"></span>
-  <StatusDot state={conn} />
-  <button class="ghost" onclick={oncyclemode} title="切换主题（自动 → 浅色 → 深色）">
-    {modeLabel}
-  </button>
+  <div class="group-right">
+    <label class="toggle" title="开启后，Agent 提交分析将停在「分析确认」列等待放行">
+      <input
+        type="checkbox"
+        checked={settings.requireAnalysisConfirm}
+        onchange={(e) => ontoggle(e.currentTarget.checked)}
+      />
+      分析需人工确认
+    </label>
+    <StatusDot state={conn} />
+    <button class="ghost" onclick={oncyclemode} title="切换主题（自动 → 浅色 → 深色）">
+      {modeLabel}
+    </button>
+  </div>
 </header>
 
 <dialog bind:this={dlg}>
@@ -96,6 +100,17 @@
 </dialog>
 
 <style>
+  .group-left,
+  .group-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+  .group-right {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
   .new-btn {
     background: var(--accent);
     color: #fff;

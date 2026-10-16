@@ -10,6 +10,7 @@
     onquickreject,
     pendingIds,
     flashIds,
+    onmove,
   }: {
     task: Task
     onopen: (task: Task) => void
@@ -19,6 +20,8 @@
     onquickreject?: (task: Task) => void
     pendingIds?: Set<string>
     flashIds?: Set<string>
+    /** 键盘跨泳道移动（方向 -1 上 / +1 下） */
+    onmove?: (task: Task, dir: -1 | 1) => void
   } = $props()
 
   const claimText = $derived(
@@ -45,6 +48,7 @@
   class:dragging-source={isDragging}
   class:inflight
   class:fail-flash={failFlash}
+  data-status={task.status}
   tabindex="0"
   role="button"
   aria-label={`查看任务：${task.title}`}
@@ -53,6 +57,10 @@
   onclick={() => onopen(task)}
   onkeydown={(e) => {
     if (e.key === "Enter") onopen(task)
+    if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown") && draggable && onmove) {
+      e.preventDefault()
+      onmove(task, e.key === "ArrowUp" ? -1 : 1)
+    }
   }}
 >
   <div class="title">{task.title}</div>

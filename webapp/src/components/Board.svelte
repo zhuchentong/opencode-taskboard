@@ -10,15 +10,15 @@
     onopen,
     onconfirm,
     onquickreject,
+    onmove,
   }: {
     tasks: Task[]
-    /** 乐观写入在途的任务 id 集合 */
     pendingIds: Set<string>
-    /** 失败回滚待红闪的任务 id 集合 */
     flashIds: Set<string>
     onopen: (task: Task) => void
     onconfirm?: (task: Task) => void
     onquickreject?: (task: Task) => void
+    onmove?: (task: Task, dir: -1 | 1) => void
   } = $props()
 
   const groups = $derived(groupByStatus(tasks))
@@ -34,6 +34,7 @@
       {onopen}
       {onconfirm}
       {onquickreject}
+      {onmove}
       {pendingIds}
       {flashIds}
     />

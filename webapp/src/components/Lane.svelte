@@ -13,6 +13,7 @@
     onopen,
     onconfirm,
     onquickreject,
+    onmove,
   }: {
     status: Status
     label: string
@@ -23,6 +24,7 @@
     onopen: (task: Task) => void
     onconfirm?: (task: Task) => void
     onquickreject?: (task: Task) => void
+    onmove?: (task: Task, dir: -1 | 1) => void
   } = $props()
 
   const isOver = $derived(drag.overStatus === status && drag.draggingId !== null)
@@ -39,7 +41,7 @@
         {#if dropIndex === i}
           <div class="drop-line" aria-hidden="true"></div>
         {/if}
-        <Card {task} {onopen} {onconfirm} {onquickreject} {pendingIds} {flashIds} />
+        <Card {task} {onopen} {onconfirm} {onquickreject} {pendingIds} {flashIds} {onmove} />
       {/each}
       {#if dropIndex === tasks.length}
         <div class="drop-line" aria-hidden="true"></div>

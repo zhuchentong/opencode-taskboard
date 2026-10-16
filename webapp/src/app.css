@@ -97,6 +97,32 @@ button.ghost:hover {
   margin: 0 auto;
 }
 
+/* ============ 状态色系：泳道头圆点与卡片左缘 ============ */
+.lane[data-status="analyzing"] .dot,
+.lane[data-status="executing"] .dot {
+  background: var(--accent);
+}
+.lane[data-status="analysis_confirm"] .dot,
+.lane[data-status="completion_confirm"] .dot {
+  background: var(--warn);
+}
+.lane[data-status="done"] .dot {
+  background: var(--muted);
+  opacity: 0.6;
+}
+.card[data-status="analyzing"],
+.card[data-status="executing"] {
+  border-left: 3px solid var(--accent);
+}
+.card[data-status="analysis_confirm"],
+.card[data-status="completion_confirm"] {
+  border-left: 3px solid var(--warn);
+}
+.card[data-status="done"] {
+  border-left: 3px solid var(--muted);
+  opacity: 0.85;
+}
+
 /* 拖拽全局视觉 */
 .drag-ghost {
   position: fixed;
