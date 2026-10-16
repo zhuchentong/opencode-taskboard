@@ -104,7 +104,7 @@ describe("工具路径流转", () => {
     const t1 = await toStatus(s, await s.create({ title: "t1" }), "analyzing")
     expect((await s.analyze({ id: t1.id, sessionID: "s1", analysis: "a" })).status).toBe("executing")
     await s.setSettings({ requireAnalysisConfirm: true })
-    expect(await s.getSettings()).toEqual({ requireAnalysisConfirm: true })
+    expect(await s.getSettings()).toEqual({ requireAnalysisConfirm: true, autoDispatch: false })
     const t2 = await toStatus(s, await s.create({ title: "t2" }), "analyzing")
     expect((await s.analyze({ id: t2.id, sessionID: "s1", analysis: "b" })).status).toBe("analysis_confirm")
   })
@@ -362,6 +362,47 @@ describe("storageBackend 分页", () => {
     })
     await s.setSettings({ requireAnalysisConfirm: true })
     expect(Object.keys(entries)).toContain("proj1/settings/board")
-    expect(await s.getSettings()).toEqual({ requireAnalysisConfirm: true })
+    expect(await s.getSettings()).toEqual({ requireAnalysisConfirm: true, autoDispatch: false })
+  })
+})
+
+describe("设置扩展与合并写入（autoDispatch）", () => {
+  test("缺省设置包含 autoDispatch:false", async () => {
+    const s = S(false)
+    expect(await s.getSettings()).toEqual({ requireAnalysisConfirm: false, autoDispatch: false })
+  })
+
+  test("旧格式存储缺 autoDispatch → 补默认值", async () => {
+    const entries: Record<string, unknown> = {}
+    const ctxStorage = {
+      get: async (k: string) => entries[k],
+      set: async (k: string, v: unknown) => {
+        entries[k] = v
+      },
+    }
+    const s = createStore(storageBackend(ctxStorage, "proj1/"), { requireAnalysisConfirm: false })
+    await s.setSettings({ requireAnalysisConfirm: true, autoDispatch: true })
+    // 模拟旧版本只存了一个字段
+    entries["proj1/settings/board"] = { requireAnalysisConfirm: true }
+    expect(await s.getSettings()).toEqual({ requireAnalysisConfirm: true, autoDispatch: false })
+  })
+
+  test("合并写入：只改一个字段不抹另一个", async () => {
+    const s = S(false)
+    await s.setSettings({ autoDispatch: true })
+    expect(await s.getSettings()).toEqual({ requireAnalysisConfirm: false, autoDispatch: true })
+    await s.setSettings({ requireAnalysisConfirm: true })
+    expect(await s.getSettings()).toEqual({ requireAnalysisConfirm: true, autoDispatch: true })
+  })
+
+  test("非布尔值 → invalid_input", async () => {
+    const s = S(false)
+    await expect(s.setSettings({ autoDispatch: "yes" as never })).rejects.toMatchObject({ code: "invalid_input" })
+    await expect(s.setSettings({ requireAnalysisConfirm: 1 as never })).rejects.toMatchObject({ code: "invalid_input" })
+  })
+
+  test("空 patch → invalid_input", async () => {
+    const s = S(false)
+    await expect(s.setSettings({})).rejects.toMatchObject({ code: "invalid_input" })
   })
 })

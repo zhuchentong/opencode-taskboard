@@ -77,7 +77,7 @@ export interface Store {
   remove(id: string): Promise<void>
   patch(id: string, p: TaskPatch): Promise<Task>
   getSettings(): Promise<BoardSettings>
-  setSettings(s: BoardSettings): Promise<void>
+  setSettings(patch: Partial<BoardSettings>): Promise<void>
   claim(input: { id?: string; sessionID: string; agent: string }): Promise<Task>
   analyze(input: { id: string; sessionID: string; analysis: string }): Promise<Task>
   complete(input: { id: string; sessionID: string; result?: string }): Promise<Task>
@@ -118,8 +118,11 @@ export function createStore(
   }
 
   const readSettings = async (): Promise<BoardSettings> => {
-    const raw = (await backend.get(SETTINGS_KEY)) as BoardSettings | undefined
-    return raw ?? { requireAnalysisConfirm: opts.requireAnalysisConfirm }
+    const raw = (await backend.get(SETTINGS_KEY)) as Partial<BoardSettings> | undefined
+    return {
+      requireAnalysisConfirm: raw?.requireAnalysisConfirm ?? opts.requireAnalysisConfirm,
+      autoDispatch: raw?.autoDispatch ?? false,
+    }
   }
 
   // 人工拖拽的 claim 维护（spec §5.4）；confirm/reject 动作不走此逻辑
@@ -225,12 +228,21 @@ export function createStore(
       return readSettings()
     },
 
-    setSettings(s) {
+    setSettings(patch) {
       return serialized(async () => {
-        if (typeof s?.requireAnalysisConfirm !== "boolean") {
-          throw new StoreError("invalid_input", "requireAnalysisConfirm 必须为布尔值")
+        // 合并写入：只更新给出的字段（旧版整体覆盖会抹掉未提交的设置项）
+        const keys = ["requireAnalysisConfirm", "autoDispatch"] as const
+        const provided = keys.filter((k) => patch?.[k] !== undefined)
+        if (provided.length === 0) {
+          throw new StoreError("invalid_input", "缺少设置字段")
         }
-        await backend.set(SETTINGS_KEY, { requireAnalysisConfirm: s.requireAnalysisConfirm })
+        for (const k of provided) {
+          if (typeof patch[k] !== "boolean") {
+            throw new StoreError("invalid_input", `${k} 必须为布尔值`)
+          }
+        }
+        const cur = await readSettings()
+        await backend.set(SETTINGS_KEY, { ...cur, ...patch })
       })
     },
 

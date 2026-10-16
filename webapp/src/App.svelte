@@ -21,7 +21,7 @@ import { STATUSES } from "./lib/board"
     dark: "主题：深色",
   }
 
-  let board = $state<BoardState>(emptyState({ requireAnalysisConfirm: false }))
+  let board = $state<BoardState>(emptyState({ requireAnalysisConfirm: false, autoDispatch: false }))
   let conn = $state<ConnState>("polling")
   let loaded = $state(false)
   let mode = $state<ThemeMode>(get(themeMode))
@@ -165,14 +165,19 @@ import { STATUSES } from "./lib/board"
   }
 
   function handleToggle(requireAnalysisConfirm: boolean) {
-    // 乐观更新设置：先本地生效（新对象引用触发重渲染），失败回滚到原设置
+    void changeSettings({ requireAnalysisConfirm })
+  }
+
+  // 设置统一通道：乐观生效，失败回滚
+  function changeSettings(patch: Partial<{ requireAnalysisConfirm: boolean; autoDispatch: boolean }>) {
     const prev = board.settings
-    board = applySnapshot(board, board.server, { ...prev, requireAnalysisConfirm })
-    putSettings(requireAnalysisConfirm)
+    board = applySnapshot(board, board.server, { ...prev, ...patch })
+    return putSettings(patch)
       .then(refresh)
       .catch((e) => {
         board = applySnapshot(board, board.server, prev)
         notify("error", `设置失败：${e.message}`)
+        throw e
       })
   }
 
@@ -186,6 +191,7 @@ import { STATUSES } from "./lib/board"
   modeLabel={MODE_LABEL[mode]}
   oncreate={handleCreate}
   ontoggle={handleToggle}
+  ondispatch={(autoDispatch: boolean) => void changeSettings({ autoDispatch })}
   oncyclemode={cycleThemeMode}
 />
 

@@ -11,6 +11,7 @@
     modeLabel,
     oncreate,
     ontoggle,
+    ondispatch,
     oncyclemode,
   }: {
     settings: BoardSettings
@@ -20,6 +21,7 @@
     /** 返回 Promise：成功后弹窗关闭并清空；失败（Promise reject）保留输入与弹窗，错误提示由 App 的 toast 负责 */
     oncreate: (title: string, description: string) => Promise<void>
     ontoggle: (requireAnalysisConfirm: boolean) => void
+    ondispatch: (autoDispatch: boolean) => void
     oncyclemode: () => void
   } = $props()
 
@@ -66,6 +68,10 @@
         onchange={(e) => ontoggle(e.currentTarget.checked)}
       />
       分析需人工确认
+    </label>
+    <label class="toggle" title="开启后，待领取出现任务时插件会自动驱动一个 Agent 会话领取并处理（一次一个）">
+      <input type="checkbox" checked={settings.autoDispatch} onchange={(e) => ondispatch(e.currentTarget.checked)} />
+      自动领取
     </label>
     <StatusDot state={conn} />
     <button class="ghost" onclick={oncyclemode} title="切换主题（自动 → 浅色 → 深色）">

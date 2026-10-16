@@ -35,4 +35,6 @@ export interface Task {
 
 export interface BoardSettings {
   requireAnalysisConfirm: boolean
+  /** 自动派发：待领取出现任务时自动驱动 Agent 会话领取（默认关） */
+  autoDispatch: boolean
 }

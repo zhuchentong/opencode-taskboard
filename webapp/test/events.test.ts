@@ -91,7 +91,7 @@ describe("connectEvents", () => {
     expect(es.url).toBe("/api/events")
     es.open()
     expect(states).toEqual(["live"])
-    es.message({ type: "snapshot", tasks: [T("a")], settings: { requireAnalysisConfirm: true } })
+    es.message({ type: "snapshot", tasks: [T("a")], settings: { requireAnalysisConfirm: true, autoDispatch: false } })
     expect(snap).toHaveLength(1)
     expect(snap[0].tasks[0].id).toBe("a")
     expect(snap[0].settings.requireAnalysisConfirm).toBe(true)
@@ -101,7 +101,7 @@ describe("connectEvents", () => {
     FakeES.instances = []
     const { handlers, snap, states } = baseHandlers()
     const timers = fakeTimers()
-    const f = fakeFetch([{ tasks: [T("srv")], settings: { requireAnalysisConfirm: false } }])
+    const f = fakeFetch([{ tasks: [T("srv")], settings: { requireAnalysisConfirm: false, autoDispatch: false } }])
     connectEvents(handlers, { EventSource: FakeES as never, setInterval: timers.set, clearInterval: timers.clear, setTimeout: timers.set, clearTimeout: timers.clear, fetchBoard: f.fn })
     const es = FakeES.instances[0]
     es.open()
@@ -120,7 +120,7 @@ describe("connectEvents", () => {
     const poll5s = timers.regs.filter((r) => r.ms === 5000)
     expect(poll5s.every((r) => r.cleared)).toBe(true)
     // Review Focus 1：恢复后收到首条快照，状态与服务器一致
-    es.message({ type: "snapshot", tasks: [T("srv2", "executing")], settings: { requireAnalysisConfirm: false } })
+    es.message({ type: "snapshot", tasks: [T("srv2", "executing")], settings: { requireAnalysisConfirm: false, autoDispatch: false } })
     expect(snap[snap.length - 1].tasks[0]).toMatchObject({ id: "srv2", status: "executing" })
   })
 
@@ -128,7 +128,7 @@ describe("connectEvents", () => {
     FakeES.instances = []
     const { handlers, snap } = baseHandlers()
     const timers = fakeTimers()
-    const f = fakeFetch([{ tasks: [], settings: { requireAnalysisConfirm: false } }])
+    const f = fakeFetch([{ tasks: [], settings: { requireAnalysisConfirm: false, autoDispatch: false } }])
     connectEvents(handlers, { EventSource: FakeES as never, setInterval: timers.set, clearInterval: timers.clear, setTimeout: timers.set, clearTimeout: timers.clear, fetchBoard: f.fn })
     expect(timers.regs.some((r) => r.ms === 30_000)).toBe(true)
     await timers.fire(30_000)
@@ -139,7 +139,7 @@ describe("connectEvents", () => {
     FakeES.instances = []
     const { handlers } = baseHandlers()
     const timers = fakeTimers()
-    const f = fakeFetch([{ tasks: [], settings: { requireAnalysisConfirm: false } }])
+    const f = fakeFetch([{ tasks: [], settings: { requireAnalysisConfirm: false, autoDispatch: false } }])
     const dispose = connectEvents(handlers, { EventSource: FakeES as never, setInterval: timers.set, clearInterval: timers.clear, setTimeout: timers.set, clearTimeout: timers.clear, fetchBoard: f.fn })
     const es = FakeES.instances[0]
     es.open()

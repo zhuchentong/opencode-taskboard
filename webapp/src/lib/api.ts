@@ -62,8 +62,8 @@ export function deleteTask(id: string): Promise<void> {
   return request<void>(`/api/tasks/${encodeURIComponent(id)}`, { method: "DELETE" })
 }
 
-export function putSettings(requireAnalysisConfirm: boolean): Promise<BoardSettings> {
-  return request<BoardSettings>("/api/settings", { method: "PUT", body: JSON.stringify({ requireAnalysisConfirm }) })
+export function putSettings(patch: Partial<{ requireAnalysisConfirm: boolean; autoDispatch: boolean }>): Promise<BoardSettings> {
+  return request<BoardSettings>("/api/settings", { method: "PUT", body: JSON.stringify(patch) })
 }
 
 export type ConnState = "live" | "reconnecting" | "polling"

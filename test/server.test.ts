@@ -117,6 +117,31 @@ describe("REST API", () => {
     expect(r3.status).toBe("analysis_confirm")
   })
 
+  test("PUT settings 合并语义：只提交一个字段不抹掉另一个", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    const base = setup(s)
+    await s.setSettings({ autoDispatch: true })
+
+    const r = await fetch(`${base}/api/settings`, {
+      method: "PUT",
+      headers: H,
+      body: JSON.stringify({ requireAnalysisConfirm: true }),
+    })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ requireAnalysisConfirm: true, autoDispatch: true })
+
+    // 非布尔 → 400
+    const bad = await fetch(`${base}/api/settings`, {
+      method: "PUT",
+      headers: H,
+      body: JSON.stringify({ autoDispatch: "on" }),
+    })
+    expect(bad.status).toBe(400)
+    // 空 patch → 400
+    const empty = await fetch(`${base}/api/settings`, { method: "PUT", headers: H, body: JSON.stringify({}) })
+    expect(empty.status).toBe(400)
+  })
+
   test("health / logs / 未知 API 路径", async () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
     const base = setup(s)
