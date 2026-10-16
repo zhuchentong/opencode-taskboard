@@ -1,0 +1,337 @@
+<script lang="ts">
+  import { fade, fly } from "svelte/transition"
+  import { STATUS_LABELS, timeAgo } from "../lib/board"
+  import { confirmDialog } from "../lib/notify"
+  import type { Task } from "../lib/types"
+
+  let {
+    task,
+    onclose,
+    onwrite,
+    ondelete,
+  }: {
+    task: Task
+    onclose: () => void
+    /** 统一写通道：onwrite(taskId, 乐观遮罩, API patch, 失败提示前缀) */
+    onwrite: (taskId: string, mask: Partial<Task>, apiPatch: Record<string, unknown>, failMsg: string) => void
+    ondelete: (taskId: string) => void
+  } = $props()
+
+  let title = $state(task.title)
+  let description = $state(task.description)
+  let comment = $state("")
+  let rejectOpen = $state(false)
+  let rejectComment = $state("")
+  let panel = $state<HTMLElement | null>(null)
+
+  // 外部快照更新时同步本地编辑态（编辑器尚未失火时跟随服务器值）
+  $effect(() => {
+    title = task.title
+    description = task.description
+  })
+
+  $effect(() => {
+    panel?.focus()
+  })
+
+  const CONFIRM_COLS = ["analysis_confirm", "completion_confirm"]
+  const canConfirm = $derived(CONFIRM_COLS.includes(task.status))
+
+  function saveTitle() {
+    const v = title.trim()
+    if (v && v !== task.title) onwrite(task.id, { title: v }, { title: v }, "保存失败")
+    else title = task.title
+  }
+
+  function saveDescription() {
+    const v = description.trim()
+    if (v !== task.description) onwrite(task.id, { description: v }, { description: v }, "保存失败")
+  }
+
+  function confirm() {
+    const nextStatus = task.status === "analysis_confirm" ? "executing" : "done"
+    onwrite(task.id, { status: nextStatus }, { action: "confirm" }, "确认失败")
+  }
+
+  function reject() {
+    const c = rejectComment.trim()
+    if (!c) return
+    onwrite(
+      task.id,
+      {
+        status: "pending",
+        claim: undefined,
+        comments: [...task.comments, { author: "user", text: c, createdAt: Date.now() }],
+      },
+      { action: "reject", comment: c },
+      "打回失败",
+    )
+    rejectComment = ""
+    rejectOpen = false
+  }
+
+  function addComment() {
+    const c = comment.trim()
+    if (!c) return
+    onwrite(
+      task.id,
+      { comments: [...task.comments, { author: "user", text: c, createdAt: Date.now() }] },
+      { action: "comment", comment: c },
+      "评论失败",
+    )
+    comment = ""
+  }
+</script>
+
+<div class="overlay" transition:fade={{ duration: 120 }} onclick={onclose} aria-hidden="true"></div>
+<aside
+  class="panel"
+  tabindex="-1"
+  bind:this={panel}
+  transition:fly={{ x: 420, duration: 200 }}
+  onkeydown={(e) => {
+    if (e.key === "Escape" && rejectOpen) {
+      rejectOpen = false
+      return
+    }
+    if (e.key === "Escape") onclose()
+  }}
+>
+  <header>
+    <span class="col-badge">{STATUS_LABELS[task.status]}</span>
+    <span class="spacer"></span>
+    <button class="ghost" onclick={onclose} aria-label="关闭详情">✕</button>
+  </header>
+
+  <label class="field">
+    <span>标题</span>
+    <input
+      bind:value={title}
+      aria-label="任务标题"
+      onkeydown={(e) => {
+        if (e.key === "Escape") {
+          title = task.title
+          e.currentTarget.blur()
+        }
+      }}
+      onchange={saveTitle}
+    />
+  </label>
+
+  <label class="field">
+    <span>描述</span>
+    <textarea
+      rows="3"
+      bind:value={description}
+      aria-label="任务描述"
+      onkeydown={(e) => {
+        if (e.key === "Escape") {
+          description = task.description
+          e.currentTarget.blur()
+        }
+      }}
+      onchange={saveDescription}
+    ></textarea>
+  </label>
+
+  {#if task.analysis}
+    <div class="field"><span>分析</span><p class="readonly">📌 {task.analysis}</p></div>
+  {/if}
+  {#if task.result}
+    <div class="field"><span>结果</span><p class="readonly">✅ {task.result}</p></div>
+  {/if}
+
+  <div class="meta">
+    <span>创建 {timeAgo(task.createdAt)}</span>
+    <span>更新 {timeAgo(task.updatedAt)}</span>
+    {#if task.claim}
+      <span>
+        {task.claim.agent === "human"
+          ? "👤 用户执行中"
+          : `🤖 ${task.claim.agent} · ${task.claim.sessionID.slice(0, 8)}`}
+      </span>
+    {/if}
+  </div>
+
+  <section class="actions">
+    {#if canConfirm}
+      <button class="primary" onclick={confirm}>通过</button>
+      <button class="danger" onclick={() => (rejectOpen = !rejectOpen)}>打回</button>
+    {/if}
+    <button
+      class="ghost"
+      onclick={() =>
+        confirmDialog(`删除「${task.title}」？`, "此操作不可恢复。").then((ok) => ok && ondelete(task.id))}
+    >
+      删除
+    </button>
+  </section>
+
+  {#if rejectOpen}
+    <div class="reject-form" transition:fly={{ y: 8, duration: 120 }}>
+      <textarea placeholder="打回原因（必填，将作为评论保留）" rows="2" bind:value={rejectComment}></textarea>
+      <div class="row">
+        <button class="ghost" onclick={() => (rejectOpen = false)}>取消</button>
+        <button class="danger" disabled={!rejectComment.trim()} onclick={reject}>打回</button>
+      </div>
+    </div>
+  {/if}
+
+  <section class="comments">
+    <h3>评论（{task.comments.length}）</h3>
+    {#each task.comments as c (c.createdAt)}
+      <div class="comment">
+        <span class="who">[{c.author}] {timeAgo(c.createdAt)}</span>
+        <p>{c.text}</p>
+      </div>
+    {:else}
+      <p class="empty">暂无评论</p>
+    {/each}
+    <div class="add-comment">
+      <textarea placeholder="添加评论（必填）" rows="2" bind:value={comment}></textarea>
+      <button class="primary" disabled={!comment.trim()} onclick={addComment}>评论</button>
+    </div>
+  </section>
+</aside>
+
+<style>
+  .overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 40;
+  }
+  .panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(420px, 90vw);
+    background: var(--col);
+    border-left: 1px solid var(--line);
+    z-index: 41;
+    padding: 16px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    outline: none;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .col-badge {
+    background: var(--line);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 12px;
+  }
+  .spacer {
+    flex: 1;
+  }
+  .field {
+    display: grid;
+    gap: 4px;
+    font-size: 13px;
+  }
+  .field > span {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  input,
+  textarea {
+    width: 100%;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 8px;
+    font-size: 13px;
+  }
+  .readonly {
+    margin: 0;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .actions {
+    display: flex;
+    gap: 8px;
+  }
+  .actions button,
+  .reject-form button,
+  .add-comment button {
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .primary {
+    background: var(--ok);
+    color: #fff;
+  }
+  .danger {
+    background: var(--danger);
+    color: #fff;
+  }
+  .ghost {
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--line);
+  }
+  button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .reject-form {
+    display: grid;
+    gap: 8px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px;
+  }
+  .row {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+  .comments h3 {
+    margin: 0 0 8px;
+    font-size: 13px;
+  }
+  .comment {
+    border-bottom: 1px solid var(--line);
+    padding: 6px 0;
+  }
+  .comment .who {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .comment p {
+    margin: 4px 0 0;
+    overflow-wrap: anywhere;
+  }
+  .empty {
+    color: var(--muted);
+    font-size: 12px;
+    opacity: 0.7;
+  }
+  .add-comment {
+    display: grid;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .add-comment button {
+    justify-self: end;
+  }
+</style>

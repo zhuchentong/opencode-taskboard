@@ -9,6 +9,7 @@
   import { connectEvents } from "./lib/events"
   import Header from "./components/Header.svelte"
   import Board from "./components/Board.svelte"
+  import TaskDetail from "./components/TaskDetail.svelte"
   import Toasts from "./components/Toasts.svelte"
   import ConfirmDialog from "./components/ConfirmDialog.svelte"
   import type { Status, Task } from "./lib/types"
@@ -23,8 +24,45 @@
   let conn = $state<ConnState>("polling")
   let loaded = $state(false)
   let mode = $state<ThemeMode>(get(themeMode))
+  let detailId = $state<string | null>(null)
 
   const visible = $derived(visibleTasks(board))
+  const detailTask = $derived(detailId ? (visible.find((t) => t.id === detailId) ?? null) : null)
+
+  function openDetail(task: Task) {
+    detailId = task.id
+  }
+
+  function closeDetail() {
+    const id = detailId
+    detailId = null
+    if (id) document.querySelector(`[data-task-id="${id}"]`)?.focus() // 焦点返还卡片
+  }
+
+  // 统一写通道：乐观遮罩 → API → 快照落地后摘遮罩（settle 时序契约）
+  function writeTask(taskId: string, mask: Partial<Task>, apiPatch: Record<string, unknown>, failMsg: string) {
+    board = beginOptimistic(board, taskId, mask)
+    patchTask(taskId, apiPatch)
+      .then(async () => {
+        await refresh()
+        board = settle(board, taskId, true)
+      })
+      .catch((e) => {
+        board = settle(board, taskId, false)
+        notify("error", `${failMsg}：${e.message}`)
+      })
+  }
+
+  // 删除：await 后由 SSE 广播的快照自动刷新看板（服务端删除也会 emit snapshot）
+  async function removeTask(taskId: string) {
+    try {
+      await deleteTask(taskId)
+      if (detailId === taskId) detailId = null
+      refresh()
+    } catch (e) {
+      notify("error", `删除失败：${e.message}`)
+    }
+  }
 
   async function refresh() {
     try {
@@ -56,17 +94,7 @@
   })
 
   function handleDrop(taskId: string, toStatus: Status) {
-    // 乐观更新协议：本地立即生效，失败回滚到服务器最近快照
-    board = beginOptimistic(board, taskId, { status: toStatus })
-    patchTask(taskId, { status: toStatus })
-      .then(async () => {
-        await refresh() // 先让服务器快照落地，再摘遮罩（settle 时序契约：applySnapshot 必须先于 settle(true)）
-        board = settle(board, taskId, true)
-      })
-      .catch((e) => {
-        board = settle(board, taskId, false)
-        notify("error", `移动失败：${e.message}`)
-      })
+    writeTask(taskId, { status: toStatus }, { status: toStatus }, "移动失败")
   }
 
   function handleCreate(title: string, description: string) {
@@ -86,8 +114,7 @@
       })
   }
 
-  // Task 11 由详情侧滑面板替换
-  const openDetail = (_task: Task) => {}
+
 </script>
 
 <Header
@@ -113,6 +140,10 @@
       </div>
     {/each}
   </main>
+{/if}
+
+{#if detailTask}
+  <TaskDetail task={detailTask} onclose={closeDetail} onwrite={writeTask} ondelete={removeTask} />
 {/if}
 
 <Toasts />
