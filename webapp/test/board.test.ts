@@ -51,7 +51,7 @@ describe("timeAgo", () => {
   test("边界：<60s 刚刚；<60m 分钟前；<24h 小时前；更早显示日期", () => {
     const now = Date.now()
     expect(timeAgo(now - 5_000)).toBe("刚刚")
-    expect(timeAgo(now - 59_999)).toBe("刚刚") // 严格 <60s 才是刚刚
+    expect(timeAgo(now - 59_000)).toBe("刚刚") // 严格 <60s 才是刚刚（留 1s 余量防毫秒抖动）
     expect(timeAgo(now - 5 * 60_000)).toBe("5 分钟前")
     expect(timeAgo(now - 59 * 60_000)).toBe("59 分钟前")
     expect(timeAgo(now - 3 * 3_600_000)).toBe("3 小时前")
