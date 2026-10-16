@@ -29,6 +29,38 @@ export function memoryBackend(): KVBackend {
   }
 }
 
+/** ctx.storage 的最小结构契约（与 OpenCode 插件上下文中的 storage 域一致） */
+export interface CtxStorageLike {
+  get(key: string): Promise<unknown | undefined>
+  set(key: string, value: unknown): Promise<void>
+  remove(key: string): Promise<void>
+  scan(opts: { prefix: string; after?: string; limit?: number }): Promise<{
+    entries: readonly { key: string; value: unknown }[]
+    next?: string
+  }>
+}
+
+/** 把 ctx.storage 适配为 KVBackend：所有 key 前置 keyPrefix（项目隔离），scan 循环游标取全量 */
+export function storageBackend(storage: CtxStorageLike, keyPrefix: string): KVBackend {
+  const K = (key: string) => keyPrefix + key
+  return {
+    get: (key) => storage.get(K(key)),
+    set: (key, value) => storage.set(K(key), value),
+    remove: (key) => storage.remove(K(key)),
+    async scan(prefix) {
+      const out: { key: string; value: unknown }[] = []
+      let after: string | undefined
+      while (true) {
+        const page = await storage.scan({ prefix: K(prefix), after, limit: 100 })
+        out.push(...page.entries)
+        if (!page.next) break
+        after = page.next
+      }
+      return out
+    },
+  }
+}
+
 const TASK_PREFIX = "task/"
 const SETTINGS_KEY = "settings/board"
 const CLAIM_STATES: ReadonlySet<Status> = new Set(["analyzing", "executing"])

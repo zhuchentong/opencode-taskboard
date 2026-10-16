@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createStore, memoryBackend } from "../src/store"
+import { createStore, memoryBackend, storageBackend } from "../src/store"
 import { StoreError, type Status, type Store, type Task } from "../src/types"
 
 const S = (requireAnalysisConfirm = false) => createStore(memoryBackend(), { requireAnalysisConfirm })
@@ -290,5 +290,68 @@ describe("并发与列表", () => {
     await s.remove(t.id)
     expect(await s.list()).toEqual([])
     expect(await codeOf(s.get(t.id))).toBe("not_found")
+  })
+})
+
+describe("storageBackend 分页", () => {
+  // 模拟 ctx.storage：scan 按 after（字典序）+ limit 截断，返回 { entries, next }
+  function fakeCtxStorage(entries: Record<string, unknown>) {
+    return {
+      async get(key: string) {
+        return entries[key]
+      },
+      async set(key: string, value: unknown) {
+        entries[key] = value
+      },
+      async remove(key: string) {
+        delete entries[key]
+      },
+      async scan(opts: { prefix: string; after?: string; limit?: number }) {
+        const keys = Object.keys(entries)
+          .filter((k) => k.startsWith(opts.prefix))
+          .sort()
+        let start = 0
+        if (opts.after) {
+          const i = keys.findIndex((k) => k > opts.after!)
+          start = i < 0 ? keys.length : i
+        }
+        const limit = opts.limit ?? 100
+        const page = keys.slice(start, start + limit)
+        return {
+          entries: page.map((k) => ({ key: k, value: entries[k] })),
+          next: start + limit < keys.length ? page[page.length - 1] : undefined,
+        }
+      },
+    }
+  }
+
+  test("跨页 scan 取全量，key 带 keyPrefix，remove 生效", async () => {
+    const entries: Record<string, unknown> = {}
+    const s = createStore(storageBackend(fakeCtxStorage(entries), "proj1/"), {
+      requireAnalysisConfirm: false,
+    })
+    const t1 = await s.create({ title: "一" })
+    const t2 = await s.create({ title: "二" })
+    const t3 = await s.create({ title: "三" })
+    // 3 个任务 + key 前缀
+    const taskKeys = Object.keys(entries).filter((k) => k.includes("task/"))
+    expect(taskKeys).toHaveLength(3)
+    expect(taskKeys.every((k) => k.startsWith("proj1/"))).toBe(true)
+
+    const list = await s.list()
+    expect(list.map((x) => x.id).sort()).toEqual([t1.id, t2.id, t3.id].sort())
+
+    await s.remove(t2.id)
+    expect((await s.list()).map((x) => x.id).sort()).toEqual([t1.id, t3.id].sort())
+  })
+
+  test("settings 落在 keyPrefix 下且持久", async () => {
+    const entries: Record<string, unknown> = {}
+    const s = createStore(storageBackend(fakeCtxStorage(entries), "proj1/"), {
+      requireAnalysisConfirm: false,
+    })
+    await s.setSettings({ requireAnalysisConfirm: true })
+    expect(Object.keys(entries)).toContain("proj1/settings/board")
+    expect(await s.getSettings()).toEqual({ requireAnalysisConfirm: true })
   })
 })
