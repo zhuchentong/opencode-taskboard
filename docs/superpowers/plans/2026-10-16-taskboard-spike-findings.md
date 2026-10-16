@@ -41,9 +41,7 @@ export default plugin
 - Task 6：装载与日志按上述决策；`KEY_PREFIX` 取 `ctx.location.project.id`。
 - Task 8：命令执行（/taskboard、/taskboard-claim）在 TUI 人工验收；playground 用装载器文件加载。
 
-## Task 8 集成验收记录（2026-10-16）
-
-环境：真实 OpenCode v2.0.30 共享服务，`.debug/playground/.opencode/plugins/taskboard-loader.ts` 装载。
+## Task 8 集成验收记录（2026-10-16）环境：真实 OpenCode v2.0.30 共享服务，`.debug/playground/.opencode/plugins/taskboard-loader.ts` 装载。
 
 | 项 | 结果 | 证据 |
 |----|------|------|
@@ -61,3 +59,13 @@ export default plugin
 **遗留人工项**（不影响自动化验收结论）：
 1. 浏览器实际点按体验（拖拽/弹层/轮询）——按钮走的是已测 REST 路由；task_491f8b4a 故意留在「完成确认」列，可直接打开 `http://127.0.0.1:4370/` 亲自点「通过」收尾。
 2. `/taskboard`、`/taskboard-claim` 命令的 TUI 触发（`opencode run` 无法触发斜杠命令，注册本身已验证）。
+
+## Webapp 构建链 Spike 结论（2026-10-16，计划 2026-10-16-webapp-svelte-refactor.md Task 1）
+
+- 版本：svelte 5.57.2 / vite 8.3.4 / @sveltejs/vite-plugin-svelte 7.3.1（webapp/ 本地 devDependencies）
+- `bun x vite build` 直接可用，无需 node 回退；构建 253ms，产物 gzip 10.4KB
+- token 占位符 `__TASKBOARD_TOKEN_VALUE__` 位于内联经典脚本，经构建原样保留（grep 断言 1 处）
+- 固定文件名生效：`src/web/assets/board.js`（entryFileNames/chunkFileNames/assetFileNames 钉住），无 hash
+- `emptyOutDir` 连带删除旧 vanilla 前端四文件——Task 2 的实质删除并入 Task 1 提交（589945d），保留每提交皆绿；Task 2 仅余测试删除与残留验证（boardKey grep 0 命中）
+- 真实实例伺服验证 OK：重启+激活后首页注入真实 token（bb3c62b5…），`/assets/board.js` 200 / 25578B
+- 运维注意：webapp/node_modules 由根 .gitignore 的 `node_modules/` 规则覆盖，无需追加
