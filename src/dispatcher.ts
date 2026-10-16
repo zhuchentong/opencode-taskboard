@@ -80,7 +80,8 @@ export interface DispatcherStorage {
 }
 
 export type DispatcherStatus = {
-  state: "idle" | "cooldown" | "paused"
+  /** disabled=设置未开启；其余仅在开启时出现 */
+  state: "disabled" | "idle" | "cooldown" | "paused"
   failStreak: number
   todayCount: number
   cooldownRemainMs: number
@@ -250,7 +251,7 @@ export function initDispatcher(
       if (claimTimer) clearTimeout(claimTimer)
     },
     status: () => ({
-      state: paused ? "paused" : Date.now() < cooldownUntil ? "cooldown" : "idle",
+      state: !lastEnabled ? "disabled" : paused ? "paused" : Date.now() < cooldownUntil ? "cooldown" : "idle",
       failStreak,
       todayCount,
       cooldownRemainMs: Math.max(0, cooldownUntil - Date.now()),

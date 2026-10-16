@@ -36,7 +36,7 @@ export function buildClaimPrompt(): string {
 export function registerCommands(
   ctx: CommandSessionCtx,
   _store: Store,
-  opts: { port: number },
+  opts: { port: number; dispatcherText?: () => string },
 ): Promise<{ dispose(): Promise<void> }> {
   const url = `http://127.0.0.1:${opts.port}/`
   return ctx.command.transform((editor) => {
@@ -49,7 +49,8 @@ export function registerCommands(
         } catch {
           // 打不开浏览器时仅输出地址
         }
-        await ctx.session.synthetic({ sessionID, text: buildBoardText(url) })
+        const extra = opts.dispatcherText?.()
+        await ctx.session.synthetic({ sessionID, text: extra ? `${buildBoardText(url)}\n${extra}` : buildBoardText(url) })
       },
     })
     editor.add({

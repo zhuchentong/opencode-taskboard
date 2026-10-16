@@ -4,7 +4,7 @@ import { createServer, type ServerHandle } from "./server"
 import { registerTools } from "./tools"
 import { registerCommands } from "./commands"
 import { clientStore } from "./client"
-import { initDispatcher } from "./dispatcher"
+import { initDispatcher, DISPATCH_CAPS } from "./dispatcher"
 
 const BASE_PORT_DEFAULT = 4370
 const MAX_LOGS = 500
@@ -150,7 +150,18 @@ export default Plugin.define({
 
     await safeRegister(arb.handle, [
       () => registerTools(ctx as never, arb.store),
-      () => registerCommands(ctx as never, arb.store, { port: arb.primaryPort }),
+      () =>
+        registerCommands(ctx as never, arb.store, {
+          port: arb.primaryPort,
+          dispatcherText: dispatcher
+            ? () => {
+                const st = dispatcher.status()
+                if (st.state === "disabled") return "🤖 自动领取：关（网页看板右上角开关可开启）"
+                const label = { idle: "空闲", cooldown: `冷却中（剩 ${Math.round(st.cooldownRemainMs / 1000)}s）`, paused: "已暂停（连续失败）", disabled: "关" }[st.state]
+                return `🤖 自动领取：${label}（今日 ${st.todayCount}/${DISPATCH_CAPS.dailyCap} 次${st.failStreak > 0 ? `，连败 ${st.failStreak}` : ""}）`
+              }
+            : undefined,
+        }),
     ])
 
     return () => {
