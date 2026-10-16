@@ -126,8 +126,8 @@ describe("initDispatcher 接线", () => {
     h.d.dispose()
   }, 4000)
 
-  test("冷却窗口内重复写事件不重复派发；间隔守卫生效", async () => {
-    const h = harness({ claimCheckMs: 5_000 })
+  test("冷却窗口内重复写事件不重复派发；单飞门生效", async () => {
+    const h = harness({ claimCheckMs: 5_000, minIntervalMs: 1 }) // 间隔守卫置 1ms，专测单飞门
     await toPending(h.store, "t1")
     await h.store.setSettings({ autoDispatch: true })
     h.fire()
@@ -135,7 +135,9 @@ describe("initDispatcher 接线", () => {
     expect(h.session.prompts).toHaveLength(1)
     h.fire()
     await sleep(60)
-    // 60s claim 检查未到，worker 空闲、但距上次派发 <10s → interval 守卫拦住
+    h.fire()
+    await sleep(60)
+    // 5s claim 检查未到 → awaitingClaim 门拦住，绝不重复派发打断 worker
     expect(h.session.prompts).toHaveLength(1)
     h.d.dispose()
   })

@@ -122,6 +122,7 @@ export function initDispatcher(
   let lastDispatchAt = 0
   let paused = false
   let lastEnabled = false
+  let awaitingClaim = false // 单飞门：派发后到 claim 出现/检查到期前，不允许再派（防打断 worker）
   let todayKey = ""
   let todayCount = 0
   let workerID: string | null = null
@@ -158,6 +159,7 @@ export function initDispatcher(
     const id = await ensureWorker()
     await ctx.session.prompt({ sessionID: id, text: buildDispatchPrompt() })
     lastDispatchAt = Date.now()
+    awaitingClaim = true
     todayCount++
     await ctx.storage.set(dailyKey(), todayCount)
     deps.log(`派发 → worker=${id}（当日第 ${todayCount} 次）`)
@@ -166,6 +168,7 @@ export function initDispatcher(
   }
 
   async function checkClaim(): Promise<void> {
+    awaitingClaim = false // 无论结果如何，本轮派发周期结束
     const tasks = await deps.store.list()
     const claimed = workerID ? tasks.some((t) => t.claim?.sessionID === workerID) : false
     if (claimed) {
@@ -196,6 +199,7 @@ export function initDispatcher(
         paused = false
         failStreak = 0
         cooldownUntil = 0
+        awaitingClaim = false
       }
       lastEnabled = settings.autoDispatch
 
@@ -208,7 +212,8 @@ export function initDispatcher(
 
       const tasks = await deps.store.list()
       const pendingCount = tasks.filter((t) => t.status === "pending").length
-      const workerBusy = workerID ? tasks.some((t) => t.status !== "done" && t.claim?.sessionID === workerID) : false
+      // worker 忙 = 已有 claim 在身，或上一轮派发还在等待领取结果（单飞门，防打断）
+      const workerBusy = awaitingClaim || (workerID ? tasks.some((t) => t.status !== "done" && t.claim?.sessionID === workerID) : false)
 
       const v = shouldDispatch(
         {
