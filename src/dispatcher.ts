@@ -128,6 +128,7 @@ export function initDispatcher(
   let lastEnabled = false
   let awaitingClaim = false // 单飞门：派发后到 claim 出现/检查到期前，不允许再派（防打断 worker）
   let nudgedTaskIDs = new Set<string>() // 已发送「继续执行」提示的任务（防重复 nudge）
+  let confirmSeen = new Set<string>() // 曾观察到停在 analysis_confirm（worker 名下）的任务——nudge 仅补这一缺口
   let todayKey = ""
   let todayCount = 0
   let workerID: string | null = null
@@ -161,17 +162,31 @@ export function initDispatcher(
   }
 
   async function dispatch(): Promise<void> {
-    const id = await ensureWorker()
-    // 上轮失败后的重试：先中断 worker 残留回合，避免新 prompt 以 steer 叠加打断产生半途状态
-    if (failStreak > 0 && ctx.session.interrupt) {
-      try {
-        await ctx.session.interrupt({ sessionID: id })
-        deps.log("重试前中断 worker 残留回合")
-      } catch {
-        // 无进行中回合时中断可能报错，忽略
+    let id: string
+    try {
+      id = await ensureWorker()
+      // 上轮失败后的重试：先中断 worker 残留回合，避免新 prompt 以 steer 叠加打断产生半途状态
+      if (failStreak > 0 && ctx.session.interrupt) {
+        try {
+          await ctx.session.interrupt({ sessionID: id })
+          deps.log("重试前中断 worker 残留回合")
+        } catch {
+          // 无进行中回合时中断可能报错，忽略
+        }
       }
+      await ctx.session.prompt({ sessionID: id, text: buildDispatchPrompt() })
+    } catch (e) {
+      // 派发路径异常同样进熔断：否则会话 API 故障时每次写广播都会无退避重试
+      failStreak++
+      const ms = nextBackoffMs(failStreak, deps.backoffBaseMs ?? DISPATCH_CAPS.backoffBaseMs)
+      cooldownUntil = Date.now() + ms
+      deps.log(`派发失败（第 ${failStreak} 连败）：${e instanceof Error ? e.message : String(e)}；冷却 ${Math.round(ms / 1000)}s`)
+      if (failStreak >= DISPATCH_CAPS.failPause) {
+        paused = true
+        deps.log(`连续失败 ${failStreak} 次，自动派发已暂停（在网页设置中关闭再开启可复位）`)
+      }
+      return
     }
-    await ctx.session.prompt({ sessionID: id, text: buildDispatchPrompt() })
     lastDispatchAt = Date.now()
     awaitingClaim = true
     todayCount++
@@ -214,6 +229,7 @@ export function initDispatcher(
         failStreak = 0
         cooldownUntil = 0
         awaitingClaim = false
+        if (claimTimer) clearTimeout(claimTimer) // 复位取代旧派发周期，其领取检查不应再触发
       }
       lastEnabled = settings.autoDispatch
 
@@ -229,15 +245,27 @@ export function initDispatcher(
       // worker 忙 = 已有 claim 在身，或上一轮派发还在等待领取结果（单飞门，防打断）
       const workerBusy = awaitingClaim || (workerID ? tasks.some((t) => t.status !== "done" && t.claim?.sessionID === workerID) : false)
 
-      // 执行唤醒：worker 名下有 executing 任务且尚未 nudge 过 → 提示继续（分析确认放行后无人唤醒的缺口）
-      if (!workerID) workerID = ((await ctx.storage.get(SESSION_KEY)) as string | undefined) ?? null // 复水（重启后内存态丢失）
-      if (!awaitingClaim && workerID && todayCount <= DISPATCH_CAPS.dailyCap) {
-        const executing = tasks.filter((t) => t.status === "executing" && t.claim?.sessionID === workerID && !nudgedTaskIDs.has(t.id))
+      // 复水（重启后内存态丢失）；先于 confirmSeen 记录，否则首次评估记不上
+      if (!workerID) workerID = ((await ctx.storage.get(SESSION_KEY)) as string | undefined) ?? null
+      // 记录「曾停在分析确认」的 worker 任务：执行唤醒只补这个缺口（confirm-off 下 worker 同回合自查自执行，不打断）
+      for (const t of tasks) {
+        if (workerID && t.status === "analysis_confirm" && t.claim?.sessionID === workerID) confirmSeen.add(t.id)
+      }
+
+      // 执行唤醒：曾停在 analysis_confirm、现已放行 executing 且未 nudge 过 → 提示继续
+      if (!awaitingClaim && workerID) {
+        const executing = tasks.filter(
+          (t) => t.status === "executing" && t.claim?.sessionID === workerID && confirmSeen.has(t.id) && !nudgedTaskIDs.has(t.id),
+        )
         if (executing.length > 0) {
           const t = executing[0]
-          nudgedTaskIDs.add(t.id)
-          await ctx.session.prompt({ sessionID: workerID, text: `看板任务「${t.title}」已放行进入执行。请继续完成它并用 taskboard_complete 提交；完成后停止。` })
-          deps.log(`执行唤醒 → worker=${workerID} task=${t.id}`)
+          try {
+            await ctx.session.prompt({ sessionID: workerID, text: `看板任务「${t.title}」已放行进入执行。请继续完成它并用 taskboard_complete 提交；完成后停止。` })
+            nudgedTaskIDs.add(t.id) // prompt 成功才记，失败下轮重试
+            deps.log(`执行唤醒 → worker=${workerID} task=${t.id}`)
+          } catch (e) {
+            deps.log(`执行唤醒失败：${e instanceof Error ? e.message : String(e)}`)
+          }
         }
       }
 

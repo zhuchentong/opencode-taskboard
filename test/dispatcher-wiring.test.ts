@@ -30,7 +30,7 @@ function fakeSession() {
   return sess
 }
 
-function harness(opts: { claimCheckMs?: number; evaluateMs?: number; backoffBaseMs?: number; minIntervalMs?: number } = {}) {
+function harness(opts: { claimCheckMs?: number; evaluateMs?: number; backoffBaseMs?: number; minIntervalMs?: number; promptFail?: boolean } = {}) {
   const entries: Record<string, unknown> = {}
   const storage = {
     get: async (k: string) => entries[k],
@@ -42,6 +42,7 @@ function harness(opts: { claimCheckMs?: number; evaluateMs?: number; backoffBase
   const lines: string[] = []
   let registered: (() => void) | null = null
   const session = fakeSession()
+  if (opts.promptFail) session.prompt = async () => { throw new Error("session api down") }
   const d = initDispatcher(
     { session, storage, projectID: "p1" },
     {
@@ -126,7 +127,7 @@ describe("initDispatcher 接线", () => {
     h.d.dispose()
   }, 4000)
 
-  test("执行唤醒：analysis_confirm 放行后 executing 触发一次继续提示，不重复", async () => {
+  test("执行唤醒：analysis_confirm 停留后被放行 → 触发一次继续提示，不重复", async () => {
     const h = harness({ claimCheckMs: 5_000 })
     await h.store.setSettings({ autoDispatch: true, requireAnalysisConfirm: true })
     const t = await toPending(h.store, "nudge-任务")
@@ -137,6 +138,9 @@ describe("initDispatcher 接线", () => {
     const promptsBefore = h.session.prompts.length
     // 预置持久 worker 指针（生产中来自更早的派发；测试直接写入 storage）
     await h.storage.set("p1/settings/dispatcher-session", "ses_w1")
+    // 第一次评估：观察到 analysis_confirm → 记入 confirmSeen
+    h.fire()
+    await sleep(40)
     // 用户在网页点「通过」→ executing
     await h.store.patch(t.id, { action: "confirm" })
     expect((await h.store.get(t.id)).claim?.sessionID).toBe("ses_w1") // 放行保留 claim（规则 #21）
@@ -148,6 +152,34 @@ describe("initDispatcher 接线", () => {
     h.fire()
     await sleep(40)
     expect(h.session.prompts.length).toBe(promptsBefore + 1)
+    h.d.dispose()
+  })
+
+  test("confirm-off（默认流程）：worker 自查自执行不经停确认 → 不 nudge 不打断", async () => {
+    const h = harness({ claimCheckMs: 5_000 })
+    await h.store.setSettings({ autoDispatch: true }) // requireAnalysisConfirm 默认 false
+    const t = await toPending(h.store, "快速任务")
+    await h.store.claim({ id: t.id, sessionID: "ses_w1", agent: "build" })
+    await h.store.analyze({ id: t.id, sessionID: "ses_w1", analysis: "a" }) // → executing（无确认关卡）
+    await h.storage.set("p1/settings/dispatcher-session", "ses_w1")
+    h.fire()
+    await sleep(60)
+    expect(h.session.prompts).toHaveLength(0) // 执行中的 worker 不被打断
+    h.d.dispose()
+  })
+
+  test("派发路径异常进熔断：prompt 抛错计连败并冷却，3 连败暂停", async () => {
+    const h = harness({ promptFail: true, backoffBaseMs: 10, minIntervalMs: 1, evaluateMs: 10 })
+    await toPending(h.store, "t1")
+    await h.store.setSettings({ autoDispatch: true })
+    for (let i = 1; i <= 3; i++) {
+      h.fire()
+      await sleep(80)
+    }
+    expect(h.session.prompts).toHaveLength(0)
+    expect(h.d.status().state).toBe("paused")
+    expect(h.d.status().failStreak).toBe(3)
+    expect(h.lines.filter((l) => l.includes("派发失败")).length).toBe(3)
     h.d.dispose()
   })
 
