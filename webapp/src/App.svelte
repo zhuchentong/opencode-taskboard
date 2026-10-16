@@ -1,8 +1,15 @@
 <script lang="ts">
   import { onMount } from "svelte"
   import { get } from "svelte/store"
-  import { cycleThemeMode, themeMode, type ThemeMode } from "./theme"
-  import type { Status } from "./lib/types"
+  import { cycleThemeMode, themeMode, initTheme, type ThemeMode } from "./theme"
+  import { fetchBoard, createTask, putSettings, type ConnState } from "./lib/api"
+  import { applySnapshot, beginOptimistic, emptyState, visibleTasks, type BoardState } from "./lib/optimistic"
+  import { notify } from "./lib/notify"
+  import Header from "./components/Header.svelte"
+  import Board from "./components/Board.svelte"
+  import Toasts from "./components/Toasts.svelte"
+  import ConfirmDialog from "./components/ConfirmDialog.svelte"
+  import type { Task } from "./lib/types"
 
   const MODE_LABEL: Record<ThemeMode, string> = {
     auto: "主题：跟随系统",
@@ -10,38 +17,116 @@
     dark: "主题：深色",
   }
 
-  // 七列静态壳：Task 6 由 Board/Column 组件替换为真实分组渲染
-  const COLUMNS: { status: Status; label: string }[] = [
-    { status: "planning", label: "待规划" },
-    { status: "pending", label: "待领取" },
-    { status: "analyzing", label: "分析中" },
-    { status: "analysis_confirm", label: "分析确认" },
-    { status: "executing", label: "执行中" },
-    { status: "completion_confirm", label: "完成确认" },
-    { status: "done", label: "已完成" },
-  ]
-
+  let board = $state<BoardState>(emptyState({ requireAnalysisConfirm: false }))
+  let conn = $state<ConnState>("polling")
+  let loaded = $state(false)
   let mode = $state<ThemeMode>(get(themeMode))
 
-  onMount(() => themeMode.subscribe((m) => (mode = m)))
+  const visible = $derived(visibleTasks(board))
 
-  const modeLabel = $derived(MODE_LABEL[mode])
+  async function refresh() {
+    try {
+      const snap = await fetchBoard()
+      board = applySnapshot(board, snap.tasks, snap.settings)
+      loaded = true
+    } catch {
+      /* 轮询失败保留现状，下轮重试 */
+    }
+  }
+
+  onMount(() => {
+    initTheme()
+    const unsub = themeMode.subscribe((m) => (mode = m))
+    // 临时 2s 轮询：Task 9 由 SSE + 30s 对账轮询替换
+    refresh()
+    const timer = setInterval(refresh, 2000)
+    return () => {
+      clearInterval(timer)
+      unsub()
+    }
+  })
+
+  function handleCreate(title: string, description: string) {
+    createTask(title, description || undefined)
+      .then(refresh)
+      .catch((e) => notify("error", `创建失败：${e.message}`))
+  }
+
+  function handleToggle(requireAnalysisConfirm: boolean) {
+    // 乐观更新设置，失败回滚（applySnapshot 新对象引用触发重渲染）
+    const prev = board.settings
+    putSettings(requireAnalysisConfirm)
+      .then(refresh)
+      .catch((e) => {
+        board = applySnapshot(board, board.server, { ...prev })
+        notify("error", `设置失败：${e.message}`)
+      })
+  }
+
+  // Task 11 由详情侧滑面板替换
+  const openDetail = (_task: Task) => {}
 </script>
 
-<header class="app-header">
-  <h1>任务看板</h1>
-  <span class="note">Header 占位：新建表单与设置开关由后续任务接入</span>
-  <span class="spacer"></span>
-  <button class="ghost" onclick={cycleThemeMode} title="切换主题（自动 → 浅色 → 深色）">
-    {modeLabel}
-  </button>
-</header>
+<Header
+  settings={board.settings}
+  {conn}
+  {mode}
+  modeLabel={MODE_LABEL[mode]}
+  oncreate={handleCreate}
+  ontoggle={handleToggle}
+  oncyclemode={cycleThemeMode}
+/>
 
-<main class="board">
-  {#each COLUMNS as col (col.status)}
-    <section class="column" data-status={col.status}>
-      <h2>{col.label}</h2>
-      <p class="empty">暂无任务</p>
-    </section>
-  {/each}
-</main>
+{#if loaded}
+  <Board tasks={visible} onopen={openDetail} />
+{:else}
+  <main class="board skeleton" aria-label="加载中">
+    {#each Array(7) as _, i (i)}
+      <div class="skel-col">
+        <div class="skel-head"></div>
+        {#each Array(2) as _, j (j)}
+          <div class="skel-card"></div>
+        {/each}
+      </div>
+    {/each}
+  </main>
+{/if}
+
+<Toasts />
+<ConfirmDialog />
+
+<style>
+  .skeleton {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(168px, 1fr));
+    gap: 10px;
+  }
+  .skel-col {
+    background: var(--col);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px;
+    display: grid;
+    gap: 8px;
+    align-content: start;
+  }
+  .skel-head,
+  .skel-card {
+    border-radius: 6px;
+    background: linear-gradient(100deg, var(--line) 40%, var(--card) 50%, var(--line) 60%);
+    background-size: 200% 100%;
+    animation: shimmer 1.2s infinite;
+  }
+  .skel-head {
+    height: 14px;
+    width: 60%;
+  }
+  .skel-card {
+    height: 72px;
+  }
+  @keyframes shimmer {
+    to {
+      background-position: -200% 0;
+    }
+  }
+</style>
