@@ -82,6 +82,7 @@
 </script>
 
 <article
+  data-task-id={task.id}
   class="group/card w-60 rounded-lg border border-l-4 bg-card p-3 text-card-foreground grid gap-1.5 text-sm cursor-pointer content-start {band} {task.status === 'done' ? 'opacity-80' : ''} {inflight ? 'opacity-60 animate-pulse' : ''} {isShadow ? 'opacity-50' : ''} {failFlash ? 'fail-flash' : ''} hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring outline-none {draggable ? '' : 'cursor-not-allowed'}"
   data-status={task.status}
   tabindex="0"

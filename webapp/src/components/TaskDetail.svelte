@@ -122,6 +122,7 @@
 <Sheet.Root open onOpenChange={(o) => !o && onclose()}>
   <Sheet.Content
     side="right"
+    showCloseButton={false}
     class="w-[90vw] gap-3.5 overflow-y-auto p-4 sm:max-w-[420px]"
     onEscapeKeyDown={handleEscapeKey}
   >
