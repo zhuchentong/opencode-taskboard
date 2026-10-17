@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte"
   import { get } from "svelte/store"
-  import { setKeyboardDragTrigger, setAriaStrings } from "svelte-dnd-action"
   import { setThemeMode, themeMode, type ThemeMode } from "./theme"
   import { fetchBoard, createTask, putSettings, patchTask, deleteTask, BoardApiError, type ConnState } from "./lib/api"
   import { applySnapshot, beginOptimistic, emptyState, settle, visibleTasks, type BoardState } from "./lib/optimistic"
   import { STATUSES } from "./lib/board"
   import { notify } from "./lib/notify"
+  import { initDrag } from "./lib/drag.svelte"
   import { needsTicker } from "./lib/duration"
   import { startTicker, stopTicker } from "./lib/ticker.svelte"
   import { connectEvents } from "./lib/events"
@@ -17,14 +17,6 @@
   import TaskDetail from "./components/TaskDetail.svelte"
   import ConfirmDialog from "./components/ConfirmDialog.svelte"
   import type { Status, Task } from "./lib/types"
-
-  // dnd 全局配置：Enter 留给打开详情，键盘拖拽仅 Space 起拖；屏幕阅读器文案中文化
-  setKeyboardDragTrigger("space")
-  setAriaStrings({
-    dragStarted: ({ itemLabel }) => `已开始拖动「${itemLabel}」，用方向键移动，Tab 切换泳道，空格放下`,
-    movedToPosition: ({ itemLabel, zoneLabel, position }) => `「${itemLabel}」已移至「${zoneLabel}」第 ${position} 位`,
-    dropped: ({ itemLabel, zoneLabel, position, count }) => `「${itemLabel}」已放入「${zoneLabel}」，第 ${position} 位，共 ${count} 项`,
-  })
 
   const MODE_LABEL: Record<ThemeMode, string> = {
     auto: "主题：跟随系统",
@@ -142,6 +134,7 @@
 
   onMount(() => {
     const unsub = themeMode.subscribe((m) => (mode = m))
+    const uninitDrag = initDrag(handleDrop)
     const disposeEvents = connectEvents({
       onSnapshot: (tasks, settings) => {
         board = applySnapshot(board, tasks, settings)
@@ -153,6 +146,7 @@
     return () => {
       disposeEvents()
       unsub()
+      uninitDrag()
     }
   })
 
@@ -219,7 +213,6 @@
     onconfirm={quickConfirm}
     onquickreject={quickReject}
     onmove={moveTask}
-    ondrop={handleDrop}
   />
 {:else}
   <main class="mx-auto flex max-w-7xl flex-col gap-2.5 p-4" aria-label="加载中">

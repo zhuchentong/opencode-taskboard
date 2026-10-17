@@ -1,6 +1,6 @@
 <script lang="ts">
   import { STATUSES, STATUS_LABELS, groupByStatus } from "$lib/board"
-  import type { Status, Task } from "$lib/types"
+  import type { Task } from "$lib/types"
   import Lane from "./Lane.svelte"
 
   let {
@@ -11,7 +11,6 @@
     onconfirm,
     onquickreject,
     onmove,
-    ondrop,
   }: {
     tasks: Task[]
     pendingIds: { has(id: string): boolean }
@@ -20,8 +19,6 @@
     onconfirm?: (task: Task) => void
     onquickreject?: (task: Task) => void
     onmove?: (task: Task, dir: -1 | 1) => void
-    /** 拖拽落定：跨泳道时回调（App 走乐观写通道） */
-    ondrop?: (taskId: string, toStatus: Status) => void
   } = $props()
 
   const groups = $derived(groupByStatus(tasks))
@@ -38,7 +35,6 @@
       {onconfirm}
       {onquickreject}
       {onmove}
-      {ondrop}
       {pendingIds}
       {flashIds}
     />

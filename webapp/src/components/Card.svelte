@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { SHADOW_ITEM_MARKER_PROPERTY_NAME } from "svelte-dnd-action"
   import { Badge } from "$lib/components/ui/badge"
   import { Button } from "$lib/components/ui/button"
+  import { cardDrag, drag } from "$lib/drag.svelte"
   import { STATUS_LABELS, timeAgo } from "$lib/board"
   import { formatClock, formatDuration, formatPhaseLine, formatPhaseTooltip, queueWaitMs } from "$lib/duration"
   import { ticker } from "$lib/ticker.svelte"
@@ -36,13 +36,11 @@
         : `🤖 ${task.claim.agent} · ${task.claim.sessionID.slice(0, 8)}`
       : "",
   )
-  // Agent 认领中的分析/执行任务禁止用户拖拽/键盘移动（防误抢；强制在 Lane 层 finalize 校验）
+  // Agent 认领中的分析/执行任务禁止用户拖拽/键盘移动（防误抢）
   const draggable = $derived(
     !(task.claim && task.claim.agent !== "human" && (task.status === "analyzing" || task.status === "executing")),
   )
-  // svelte-dnd-action 拖拽预览时塞入的占位影子项流经本组件：
-  // 不渲染完整卡片（免得半透明白卡浮着），渲染虚线占位框——同时充当「会插到这里」的位置指示
-  const isShadow = $derived((task as Record<symbol, unknown>)[SHADOW_ITEM_MARKER_PROPERTY_NAME] === true)
+  const isDragging = $derived(drag.draggingId === task.id)
   const inflight = $derived(pendingIds?.has(task.id) ?? false)
   const failFlash = $derived(flashIds?.has(task.id) ?? false)
   const canConfirm = $derived(
@@ -82,18 +80,17 @@
   })
 </script>
 
-{#if isShadow}
-  <!-- 插入位置指示：虚线占位框（高度近似卡片，避免让位跳动过大） -->
-  <div class="h-24 w-60 rounded-lg border-2 border-dashed border-primary/50 bg-primary/5" aria-hidden="true"></div>
-{:else}
 <article
   data-task-id={task.id}
-  class="group/card w-60 rounded-lg border border-l-4 bg-card p-3 text-card-foreground grid gap-1.5 text-sm cursor-pointer content-start {band} {task.status === 'done' ? 'opacity-80' : ''} {inflight ? 'opacity-60 animate-pulse' : ''} {isShadow ? 'opacity-50' : ''} {failFlash ? 'fail-flash' : ''} hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring outline-none {draggable ? '' : 'cursor-not-allowed'}"
+  class="group/card w-60 rounded-lg border border-l-4 bg-card p-3 text-card-foreground grid gap-1.5 text-sm cursor-pointer content-start {band} {task.status === 'done' ? 'opacity-80' : ''} {inflight ? 'opacity-60 animate-pulse' : ''} {failFlash ? 'fail-flash' : ''} hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring outline-none {draggable ? '' : 'cursor-not-allowed'}"
+  class:dragging-source={isDragging}
+  data-draggable={draggable ? "yes" : "no"}
   data-status={task.status}
   tabindex="0"
   role="button"
   aria-label={`查看任务：${task.title}`}
   title={[phaseTitle, queueTitle, draggable ? "" : "正由 Agent 处理，不能移动"].filter(Boolean).join("\n") || undefined}
+  use:cardDrag={task.id}
   onclick={() => onopen(task)}
   onkeydown={(e) => {
     if (e.key === "Enter") onopen(task)
@@ -124,7 +121,7 @@
     {#if claimText}<span>{claimText}</span>{/if}
     {#if task.comments.length > 0}<span>💬 {task.comments.length}</span>{/if}
   </div>
-  {#if canConfirm && !isShadow}
+  {#if canConfirm}
     <div
       class="hidden group-hover/card:flex group-focus-within/card:flex gap-1.5"
       role="toolbar"
@@ -146,9 +143,12 @@
     </div>
   {/if}
 </article>
-{/if}
 
 <style>
+  /* 拖拽中的原卡片：半透明（ghost 克隆负责跟手视觉） */
+  .dragging-source {
+    opacity: 0.4;
+  }
   /* 失败红闪：乐观写失败的一拍提示（动画结束自动消失，类由 App 在 650ms 后摘除） */
   .fail-flash {
     animation: fail-flash 0.6s ease-out;

@@ -15,8 +15,8 @@ describe("回归基线载体标记", () => {
   test("TaskDetail 关闭 Sheet 内置关闭按钮（避免与自绘 ✕ 重叠成双）", () => {
     expect(detail).toContain("showCloseButton={false}")
   })
-  test("拖拽占位影子项渲染虚线占位框而非完整卡片（插入位置指示）", () => {
-    expect(card).toContain("border-dashed border-primary/50")
-    expect(lane).toContain("flipDurationMs = 80")
+  test("手写拖拽接线恢复（cardDrag action + 插入指示线）", () => {
+    expect(card).toContain("use:cardDrag={task.id}")
+    expect(lane).toContain('class="drop-line')
   })
 })
