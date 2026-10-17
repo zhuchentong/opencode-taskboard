@@ -3,7 +3,8 @@
   import { Button } from "$lib/components/ui/button"
   import { Input } from "$lib/components/ui/input"
   import { Textarea } from "$lib/components/ui/textarea"
-  import * as Sheet from "$lib/components/ui/sheet"
+  import * as Dialog from "$lib/components/ui/dialog"
+  import * as Tabs from "$lib/components/ui/tabs"
   import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "$lib/components/ui/table"
   import { STATUS_LABELS, timeAgo } from "$lib/board"
   import { formatClock, formatDuration, phaseViews, queueWaitMs } from "$lib/duration"
@@ -110,7 +111,7 @@
     comment = ""
   }
 
-  // Esc 分层：打回表单开着时先收表单，否则关闭抽屉
+  // Esc 分层：打回表单开着时先收表单，否则关闭弹窗
   function handleEscapeKey(e: KeyboardEvent) {
     if (rejectOpen) {
       e.preventDefault()
@@ -119,191 +120,195 @@
   }
 </script>
 
-<Sheet.Root open onOpenChange={(o) => !o && onclose()}>
-  <Sheet.Content
-    side="right"
-    showCloseButton={false}
-    class="w-[90vw] gap-3.5 overflow-y-auto p-4 sm:max-w-[420px]"
+<Dialog.Root open onOpenChange={(o) => !o && onclose()}>
+  <Dialog.Content
+    class="flex max-h-[85dvh] flex-col gap-3 p-4 sm:max-w-xl"
     onEscapeKeyDown={handleEscapeKey}
   >
-    <Sheet.Header class="gap-1">
-      <div class="flex items-center gap-2">
-        <Badge variant="secondary" class="font-normal text-muted-foreground">{STATUS_LABELS[task.status]}</Badge>
-        <span class="flex-1"></span>
-        <Sheet.Close
-          class="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-          aria-label="关闭详情">✕</Sheet.Close>
+    <Dialog.Header class="gap-1">
+      <Badge variant="secondary" class="w-fit font-normal text-muted-foreground">{STATUS_LABELS[task.status]}</Badge>
+      <Dialog.Title class="text-base wrap-anywhere">{task.title}</Dialog.Title>
+      <Dialog.Description class="sr-only">{task.description || "任务详情"}</Dialog.Description>
+    </Dialog.Header>
+
+    <Tabs.Root value="content" class="flex min-h-0 flex-1 flex-col gap-2.5">
+      <Tabs.List>
+        <Tabs.Trigger value="content">内容</Tabs.Trigger>
+        <Tabs.Trigger value="stats">统计</Tabs.Trigger>
+        <Tabs.Trigger value="comments">评论</Tabs.Trigger>
+      </Tabs.List>
+      <!-- 焦点锚 + 唯一滚动区：页头/页签/页脚固定，仅本容器内部滚动 -->
+      <div class="min-h-0 flex-1 overflow-y-auto outline-none" bind:this={panel} tabindex="-1">
+        <Tabs.Content value="content" class="grid gap-4">
+          <label class="grid gap-1 text-[13px]">
+            <span class="text-xs text-muted-foreground">标题</span>
+            <Input
+              bind:value={title}
+              aria-label="任务标题"
+              onfocus={() => (editing = true)}
+              onblur={() => {
+                editing = false
+                saveTitle()
+              }}
+              onkeydown={(e) => {
+                if (e.key === "Escape") {
+                  title = task.title
+                  e.currentTarget.blur()
+                }
+              }}
+              onchange={saveTitle}
+            />
+          </label>
+
+          <label class="grid gap-1 text-[13px]">
+            <span class="text-xs text-muted-foreground">描述</span>
+            <Textarea
+              rows="3"
+              bind:value={description}
+              aria-label="任务描述"
+              onfocus={() => (editing = true)}
+              onblur={() => {
+                editing = false
+                saveDescription()
+              }}
+              onkeydown={(e) => {
+                if (e.key === "Escape") {
+                  description = task.description
+                  e.currentTarget.blur()
+                }
+              }}
+              onchange={saveDescription}
+            ></Textarea>
+          </label>
+
+          {#if task.analysis}
+            <div class="grid gap-1 text-[13px]">
+              <span class="text-xs text-muted-foreground">分析</span>
+              <!-- 用 div 而非 p：Markdown 渲染块级元素，<p> 会被浏览器提前闭合导致样式失效 -->
+              <div class="grid grid-cols-[auto_1fr] items-start gap-x-1 text-muted-foreground"><span aria-hidden="true">📌</span><div class="prose prose-sm dark:prose-invert max-w-none wrap-anywhere"><Markdown source={task.analysis} /></div></div>
+            </div>
+          {/if}
+          {#if task.result}
+            <div class="grid gap-1 text-[13px]">
+              <span class="text-xs text-muted-foreground">结果</span>
+              <div class="grid grid-cols-[auto_1fr] items-start gap-x-1 text-muted-foreground"><span aria-hidden="true">✅</span><div class="prose prose-sm dark:prose-invert max-w-none wrap-anywhere"><Markdown source={task.result} /></div></div>
+            </div>
+          {/if}
+        </Tabs.Content>
+
+        <Tabs.Content value="stats" class="grid gap-2.5">
+          <div class="flex flex-wrap gap-2.5 text-xs text-muted-foreground">
+            <span>创建 {timeAgo(task.createdAt)}</span>
+            <span>更新 {timeAgo(task.updatedAt)}</span>
+            {#if queueMs !== null}
+              <span class="text-warning">⏳ 排队中 {formatDuration(queueMs)}（{formatClock(task.pendingAt ?? task.createdAt)} 起）</span>
+            {/if}
+            {#if task.claim}
+              <span>
+                {task.claim.agent === "human"
+                  ? "👤 用户执行中"
+                  : `🤖 ${task.claim.agent} · ${task.claim.sessionID.slice(0, 8)}`}
+              </span>
+            {/if}
+          </div>
+
+          {#if views.length > 0}
+            <section class="grid gap-1.5 rounded-lg border p-2.5">
+              <h3 class="text-[13px] font-medium">计时</h3>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>阶段</TableHead>
+                    <TableHead>开始</TableHead>
+                    <TableHead>结束</TableHead>
+                    <TableHead class="text-right">用时</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {#each views as v (v.phase)}
+                    <TableRow>
+                      <TableCell>{v.label}</TableCell>
+                      <TableCell>{formatClock(v.startedAt)}</TableCell>
+                      <TableCell>{v.running ? "进行中" : v.endedAt !== undefined ? formatClock(v.endedAt) : "—"}</TableCell>
+                      <TableCell class="text-right tabular-nums">{v.running ? `已 ${formatDuration(v.duration)}` : formatDuration(v.duration)}</TableCell>
+                    </TableRow>
+                  {/each}
+                </TableBody>
+              </Table>
+            </section>
+          {/if}
+
+          {#if task.usage}
+            <section class="grid gap-1.5 rounded-lg border p-2.5">
+              <h3 class="text-[13px] font-medium">消耗</h3>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>项目</TableHead>
+                    <TableHead class="text-right">token</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {#each USAGE_ROWS as row (row.key)}
+                    <TableRow>
+                      <TableCell>{row.label}</TableCell>
+                      <TableCell class="text-right tabular-nums">{formatTokens(task.usage[row.key])}</TableCell>
+                    </TableRow>
+                  {/each}
+                  <TableRow>
+                    <TableCell>合计</TableCell>
+                    <TableCell class="text-right tabular-nums">{formatTokens(totalTokens(task.usage))}</TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </section>
+          {/if}
+        </Tabs.Content>
+
+        <Tabs.Content value="comments" class="grid gap-2">
+          <h3 class="text-[13px] font-medium">评论（{task.comments.length}）</h3>
+          {#each task.comments as c (c.createdAt)}
+            <div class="border-b py-1.5">
+              <span class="text-xs text-muted-foreground">[{c.author}] {timeAgo(c.createdAt)}</span>
+              <p class="mt-1 text-[13px] wrap-anywhere">{c.text}</p>
+            </div>
+          {:else}
+            <p class="text-xs text-muted-foreground/70">暂无评论</p>
+          {/each}
+          <div class="mt-1.5 grid gap-2">
+            <Textarea placeholder="添加评论（必填）" rows="2" bind:value={comment}></Textarea>
+            <Button class="justify-self-end" disabled={!comment.trim()} onclick={addComment}>评论</Button>
+          </div>
+        </Tabs.Content>
       </div>
-      <Sheet.Title class="text-base wrap-anywhere">{task.title}</Sheet.Title>
-      <Sheet.Description class="sr-only">{task.description || "任务详情"}</Sheet.Description>
-    </Sheet.Header>
+    </Tabs.Root>
 
-    <div class="grid gap-4" bind:this={panel} tabindex="-1" class:outline-none>
-      <label class="grid gap-1 text-[13px]">
-        <span class="text-xs text-muted-foreground">标题</span>
-        <Input
-          bind:value={title}
-          aria-label="任务标题"
-          onfocus={() => (editing = true)}
-          onblur={() => {
-            editing = false
-            saveTitle()
-          }}
-          onkeydown={(e) => {
-            if (e.key === "Escape") {
-              title = task.title
-              e.currentTarget.blur()
-            }
-          }}
-          onchange={saveTitle}
-        />
-      </label>
-
-      <label class="grid gap-1 text-[13px]">
-        <span class="text-xs text-muted-foreground">描述</span>
+    {#if rejectOpen}
+      <div class="grid gap-2 rounded-lg border p-2.5">
         <Textarea
-          rows="3"
-          bind:value={description}
-          aria-label="任务描述"
-          onfocus={() => (editing = true)}
-          onblur={() => {
-            editing = false
-            saveDescription()
-          }}
-          onkeydown={(e) => {
-            if (e.key === "Escape") {
-              description = task.description
-              e.currentTarget.blur()
-            }
-          }}
-          onchange={saveDescription}
-        ></Textarea>
-      </label>
-
-      {#if task.analysis}
-        <div class="grid gap-1 text-[13px]">
-          <span class="text-xs text-muted-foreground">分析</span>
-          <!-- 用 div 而非 p：Markdown 渲染块级元素，<p> 会被浏览器提前闭合导致样式失效 -->
-          <div class="grid grid-cols-[auto_1fr] items-start gap-x-1 text-muted-foreground"><span aria-hidden="true">📌</span><div class="prose prose-sm dark:prose-invert max-w-none wrap-anywhere"><Markdown source={task.analysis} /></div></div>
+          bind:this={rejectInput}
+          placeholder="打回原因（必填，将作为评论保留）"
+          rows="2"
+          bind:value={rejectComment}></Textarea>
+        <div class="flex justify-end gap-2">
+          <Button variant="ghost" onclick={() => (rejectOpen = false)}>取消</Button>
+          <Button variant="destructive" disabled={!rejectComment.trim()} onclick={reject}>打回</Button>
         </div>
-      {/if}
-      {#if task.result}
-        <div class="grid gap-1 text-[13px]">
-          <span class="text-xs text-muted-foreground">结果</span>
-          <div class="grid grid-cols-[auto_1fr] items-start gap-x-1 text-muted-foreground"><span aria-hidden="true">✅</span><div class="prose prose-sm dark:prose-invert max-w-none wrap-anywhere"><Markdown source={task.result} /></div></div>
-        </div>
-      {/if}
-
-      <div class="flex flex-wrap gap-2.5 text-xs text-muted-foreground">
-        <span>创建 {timeAgo(task.createdAt)}</span>
-        <span>更新 {timeAgo(task.updatedAt)}</span>
-        {#if queueMs !== null}
-          <span class="text-warning">⏳ 排队中 {formatDuration(queueMs)}（{formatClock(task.pendingAt ?? task.createdAt)} 起）</span>
-        {/if}
-        {#if task.claim}
-          <span>
-            {task.claim.agent === "human"
-              ? "👤 用户执行中"
-              : `🤖 ${task.claim.agent} · ${task.claim.sessionID.slice(0, 8)}`}
-          </span>
-        {/if}
       </div>
+    {/if}
 
-      {#if views.length > 0}
-        <section class="grid gap-1.5 rounded-lg border p-2.5">
-          <h3 class="text-[13px] font-medium">计时</h3>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>阶段</TableHead>
-                <TableHead>开始</TableHead>
-                <TableHead>结束</TableHead>
-                <TableHead class="text-right">用时</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {#each views as v (v.phase)}
-                <TableRow>
-                  <TableCell>{v.label}</TableCell>
-                  <TableCell>{formatClock(v.startedAt)}</TableCell>
-                  <TableCell>{v.running ? "进行中" : v.endedAt !== undefined ? formatClock(v.endedAt) : "—"}</TableCell>
-                  <TableCell class="text-right tabular-nums">{v.running ? `已 ${formatDuration(v.duration)}` : formatDuration(v.duration)}</TableCell>
-                </TableRow>
-              {/each}
-            </TableBody>
-          </Table>
-        </section>
+    <Dialog.Footer class="flex flex-row justify-end gap-2">
+      {#if canConfirm}
+        <Button class="bg-success text-success-foreground hover:bg-success/90" onclick={confirm}>通过</Button>
+        <Button variant="destructive" onclick={() => (rejectOpen = !rejectOpen)}>打回</Button>
       {/if}
-
-      {#if task.usage}
-        <section class="grid gap-1.5 rounded-lg border p-2.5">
-          <h3 class="text-[13px] font-medium">消耗</h3>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>项目</TableHead>
-                <TableHead class="text-right">token</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {#each USAGE_ROWS as row (row.key)}
-                <TableRow>
-                  <TableCell>{row.label}</TableCell>
-                  <TableCell class="text-right tabular-nums">{formatTokens(task.usage[row.key])}</TableCell>
-                </TableRow>
-              {/each}
-              <TableRow>
-                <TableCell>合计</TableCell>
-                <TableCell class="text-right tabular-nums">{formatTokens(totalTokens(task.usage))}</TableCell>
-              </TableRow>
-            </TableBody>
-          </Table>
-        </section>
-      {/if}
-
-      <section class="flex gap-2">
-        {#if canConfirm}
-          <Button class="bg-success text-success-foreground hover:bg-success/90" onclick={confirm}>通过</Button>
-          <Button variant="destructive" onclick={() => (rejectOpen = !rejectOpen)}>打回</Button>
-        {/if}
-        <Button
-          variant="outline"
-          onclick={() =>
-            confirmDialog(`删除「${task.title}」？`, "此操作不可恢复。").then((ok) => ok && ondelete(task.id))}
-        >
-          删除
-        </Button>
-      </section>
-
-      {#if rejectOpen}
-        <div class="grid gap-2 rounded-lg border p-2.5">
-          <Textarea
-            bind:this={rejectInput}
-            placeholder="打回原因（必填，将作为评论保留）"
-            rows="2"
-            bind:value={rejectComment}></Textarea>
-          <div class="flex justify-end gap-2">
-            <Button variant="ghost" onclick={() => (rejectOpen = false)}>取消</Button>
-            <Button variant="destructive" disabled={!rejectComment.trim()} onclick={reject}>打回</Button>
-          </div>
-        </div>
-      {/if}
-
-      <section class="grid gap-2 pb-2">
-        <h3 class="text-[13px] font-medium">评论（{task.comments.length}）</h3>
-        {#each task.comments as c (c.createdAt)}
-          <div class="border-b py-1.5">
-            <span class="text-xs text-muted-foreground">[{c.author}] {timeAgo(c.createdAt)}</span>
-            <p class="mt-1 text-[13px] wrap-anywhere">{c.text}</p>
-          </div>
-        {:else}
-          <p class="text-xs text-muted-foreground/70">暂无评论</p>
-        {/each}
-        <div class="mt-1.5 grid gap-2">
-          <Textarea placeholder="添加评论（必填）" rows="2" bind:value={comment}></Textarea>
-          <Button class="justify-self-end" disabled={!comment.trim()} onclick={addComment}>评论</Button>
-        </div>
-      </section>
-    </div>
-  </Sheet.Content>
-</Sheet.Root>
+      <Button
+        variant="outline"
+        onclick={() =>
+          confirmDialog(`删除「${task.title}」？`, "此操作不可恢复。").then((ok) => ok && ondelete(task.id))}
+      >
+        删除
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
