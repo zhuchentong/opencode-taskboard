@@ -338,7 +338,7 @@ export function initDispatcher(
         primary: true,
         enabled: settings.autoDispatch,
         paused: isPaused(),
-        pendingCount: pending.length,
+        pendingCount: pendingTotal,
         activeCount: active,
         inCooldown: inCooldown(),
         lastDispatchAgeMs: lastDispatchAt ? nowMs - lastDispatchAt : null,
@@ -355,6 +355,12 @@ export function initDispatcher(
       return
     }
     lastSkipReason = ""
+    // pending 已剔除冷却中与在途任务；若为空（全部待领取任务均在任务冷却或已在途），
+    // 不可派遣 pending[0]（undefined 会崩溃），记日志后等下一轮（冷却到期会自然恢复）
+    if (pending.length === 0) {
+      deps.log("无可立即派发的待领取任务：全部在任务冷却中或已在途派发")
+      return
+    }
     // 一轮至多派发一个;还剩空槽由 dispatch 完成的 requestInternal 排空续接
     await dispatchFrontier(pending[0])
   }
