@@ -214,6 +214,10 @@ export function describeError(e: unknown): string {
         return `看板当前没有待领取的任务。${msg}`
       case "invalid_input":
         return `参数不合法：${msg}`
+      case "unreachable":
+        return `看板服务不可达：${msg}（主实例可能已退出，请让用户重启 OpenCode 会话）`
+      case "forbidden":
+        return `访问被拒绝：令牌不匹配。${msg}（请让用户重启会话以重新同步令牌）`
       default:
         return `看板操作失败：${msg}`
     }

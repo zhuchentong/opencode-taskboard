@@ -61,14 +61,23 @@ export interface BoardSettings {
   autoDispatch: boolean
 }
 
-export type StoreErrorCode =
-  | "not_found"
-  | "invalid_transition"
-  | "conflict"
-  | "not_claimer"
-  | "comment_required"
-  | "no_pending"
-  | "invalid_input"
+export const STORE_ERROR_CODES = [
+  "not_found",
+  "invalid_transition",
+  "conflict",
+  "not_claimer",
+  "comment_required",
+  "no_pending",
+  "invalid_input",
+  "unreachable",
+  "forbidden",
+] as const
+
+export type StoreErrorCode = (typeof STORE_ERROR_CODES)[number]
+
+export function isStoreErrorCode(c: unknown): c is StoreErrorCode {
+  return typeof c === "string" && (STORE_ERROR_CODES as readonly string[]).includes(c)
+}
 
 export class StoreError extends Error {
   code: StoreErrorCode

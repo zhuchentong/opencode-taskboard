@@ -27,6 +27,8 @@ const STATUS_BY_CODE: Record<string, number> = {
   comment_required: 400,
   no_pending: 400,
   invalid_input: 400,
+  unreachable: 503,
+  forbidden: 403,
 }
 
 function errorResponse(e: unknown): Response {

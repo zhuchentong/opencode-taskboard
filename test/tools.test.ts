@@ -27,6 +27,11 @@ describe("describeError", () => {
     expect(text).toContain("看板操作失败")
     expect(text).toContain("boom")
   })
+
+  test("describeError：unreachable 与 forbidden 给出可操作文案", () => {
+    expect(describeError(new StoreError("unreachable", "连不上"))).toContain("不可达")
+    expect(describeError(new StoreError("forbidden", "令牌错"))).toContain("令牌不匹配")
+  })
 })
 
 describe("renderTask", () => {

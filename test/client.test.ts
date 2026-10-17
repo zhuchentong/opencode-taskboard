@@ -43,4 +43,37 @@ describe("clientStore（HTTP Store 实现）", () => {
       handle.stop()
     }
   })
+
+  test("连接拒绝 → unreachable；响应悬挂 → 超时归一为 unreachable", async () => {
+    // 连接拒绝：先起后停，拿到确定拒绝的端口
+    const dead = Bun.serve({ port: 0, fetch: () => new Response("x") })
+    const deadPort = dead.port
+    dead.stop(true)
+    const s1 = clientStore(`http://127.0.0.1:${deadPort}`, "t")
+    try { await s1.list(); expect.unreachable() } catch (e) { expect((e as { code?: string }).code).toBe("unreachable") }
+
+    // 响应悬挂：服务延迟 300ms，客户端超时 50ms
+    const slow = Bun.serve({ port: 0, fetch: async () => { await Bun.sleep(300); return Response.json([]) } })
+    try {
+      const s2 = clientStore(`http://127.0.0.1:${slow.port}`, "t", { timeoutMs: 50 })
+      try { await s2.list(); expect.unreachable() } catch (e) { expect((e as { code?: string }).code).toBe("unreachable") }
+    } finally { slow.stop(true) }
+  })
+
+  test("服务端未知错误码还原为 conflict；forbidden 保留语义", async () => {
+    const weird = Bun.serve({ port: 0, fetch: () => Response.json({ error: { code: "weird", message: "怪码" } }, { status: 400 }) })
+    try {
+      const s = clientStore(`http://127.0.0.1:${weird.port}`, "t")
+      try { await s.list(); expect.unreachable() } catch (e) {
+        expect((e as { code?: string }).code).toBe("conflict")
+        expect((e as { message?: string }).message).toContain("怪码")
+      }
+    } finally { weird.stop(true) }
+
+    const deny = Bun.serve({ port: 0, fetch: () => Response.json({ error: { code: "forbidden", message: "令牌错" } }, { status: 403 }) })
+    try {
+      const s = clientStore(`http://127.0.0.1:${deny.port}`, "t")
+      try { await s.list(); expect.unreachable() } catch (e) { expect((e as { code?: string }).code).toBe("forbidden") }
+    } finally { deny.stop(true) }
+  })
 })

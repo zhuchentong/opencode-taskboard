@@ -1,20 +1,28 @@
-import { StoreError, type StoreErrorCode, type Task, type TaskPatch } from "./types"
+import { StoreError, isStoreErrorCode, type Task, type TaskPatch } from "./types"
 import type { Store } from "./store"
 
 /**
- * Store 的 HTTP 客户端实现：次要实例用它把包括工具在内的全部写操作
+ * Store 的 HTTP 客户端实现：次要实例用它把包括工具在内的全部读写操作
  * 代理到持有基准端口的主实例（spec §9 写者唯一原则）。
  */
-export function clientStore(base: string, token: string): Store {
+export function clientStore(base: string, token: string, opts?: { timeoutMs?: number }): Store {
+  const timeoutMs = opts?.timeoutMs ?? 10_000
   const call = async <T>(path: string, init?: RequestInit): Promise<T> => {
-    const res = await fetch(base + path, {
-      ...init,
-      headers: {
-        "X-Taskboard-Token": token,
-        "Content-Type": "application/json",
-        ...(init?.headers as Record<string, string> | undefined),
-      },
-    })
+    let res: Response
+    try {
+      res = await fetch(base + path, {
+        ...init,
+        headers: {
+          "X-Taskboard-Token": token,
+          "Content-Type": "application/json",
+          ...(init?.headers as Record<string, string> | undefined),
+        },
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+    } catch {
+      // 网络层异常（连接拒绝 / 超时中断）统一归一为 unreachable
+      throw new StoreError("unreachable", `无法连接主实例 ${base}`)
+    }
     const body = (await res.json().catch(() => undefined)) as
       | T
       | { error?: { code?: string; message?: string } }
@@ -22,7 +30,7 @@ export function clientStore(base: string, token: string): Store {
     if (!res.ok) {
       const err = (body as { error?: { code?: string; message?: string } } | undefined)?.error
       throw new StoreError(
-        (err?.code as StoreErrorCode) ?? "conflict",
+        isStoreErrorCode(err?.code) ? err.code : "conflict",
         err?.message ?? `看板服务返回 ${res.status}`,
       )
     }
