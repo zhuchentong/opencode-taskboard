@@ -1,81 +1,19 @@
 // Toast 通知与确认弹层的共享状态（纯 TS，不 import .svelte）
-// - toasts/notify：右下角堆叠通知，4s 自动消失，hover 暂停计时
-// - confirmDialog：替代 window.confirm 的单例确认弹层（Promise<boolean>）
+// - notify：toast 走 svelte-sonner（展示、堆叠、自动消失由它接管）
+// - confirmDialog：替代 window.confirm 的单例确认弹层（Promise<boolean>），
+//   经 confirmState store 供 ConfirmDialog 组件（shadcn AlertDialog）响应式消费
 import { get, writable } from "svelte/store"
+import { toast } from "svelte-sonner"
 import type { Writable } from "svelte/store"
 
 export type ToastKind = "success" | "error"
 
-export interface ToastItem {
-  id: number
-  kind: ToastKind
-  text: string
-}
-
-export const toasts: Writable<{ id: number; kind: "success" | "error"; text: string }[]> =
-  writable([])
-
 const TOAST_DURATION = 4000
 
-let nextId = 1
-
-// 每条 toast 的倒计时状态：支持 hover 暂停（pauseToast）/恢复（resumeToast）
-interface ToastTimer {
-  handle: ReturnType<typeof setTimeout> | null // null = 已暂停
-  remaining: number
-  startedAt: number
-}
-const toastTimers = new Map<number, ToastTimer>()
-
-function startTimer(id: number, delay: number): void {
-  cancelTimer(id)
-  toastTimers.set(id, {
-    handle: setTimeout(() => dismissToast(id), delay),
-    remaining: delay,
-    startedAt: Date.now(),
-  })
-}
-
-function cancelTimer(id: number): void {
-  const t = toastTimers.get(id)
-  if (t) {
-    if (t.handle !== null) clearTimeout(t.handle)
-    toastTimers.delete(id)
-  }
-}
-
-export function dismissToast(id: number): void {
-  cancelTimer(id)
-  toasts.update((list) => list.filter((t) => t.id !== id))
-}
-
-/** 暂停该条 toast 的自动消失倒计时（鼠标悬停时调用） */
-export function pauseToast(id: number): void {
-  const t = toastTimers.get(id)
-  if (!t || t.handle === null) return
-  clearTimeout(t.handle)
-  t.remaining = Math.max(t.remaining - (Date.now() - t.startedAt), 0)
-  t.handle = null
-}
-
-/** 恢复该条 toast 的剩余倒计时（鼠标移出时调用） */
-export function resumeToast(id: number): void {
-  const t = toastTimers.get(id)
-  if (!t || t.handle !== null) return
-  t.startedAt = Date.now()
-  t.handle = setTimeout(() => dismissToast(id), t.remaining)
-}
-
-export function notify(kind: "success" | "error", text: string): void {
-  // 同文案同类通知不叠加：仅重置该条的 4s 计时
-  const existing = get(toasts).find((t) => t.kind === kind && t.text === text)
-  if (existing) {
-    startTimer(existing.id, TOAST_DURATION)
-    return
-  }
-  const id = nextId++
-  toasts.update((list) => [...list, { id, kind, text }])
-  startTimer(id, TOAST_DURATION)
+/** 右下角 toast；同类同文案由 sonner 自行去重堆叠 */
+export function notify(kind: ToastKind, text: string): void {
+  if (kind === "success") toast.success(text, { duration: TOAST_DURATION })
+  else toast.error(text, { duration: TOAST_DURATION })
 }
 
 // ============ 确认弹层（单例） ============

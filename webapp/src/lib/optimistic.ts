@@ -32,8 +32,6 @@ export function beginOptimistic(
   return { ...state, pending }
 }
 
-// 写结算：无论成败都摘除遮罩——成功后视图=服务器值；失败则自动回滚到 server 最近快照。
-// 未知 taskId（遮罩不存在）容错：原样返回。
 /**
  * 摘除任务遮罩。时序契约（接线方必须遵守）：
  * 成功路径必须先让服务器快照落地（applySnapshot）再调用 settle(id, true)，
