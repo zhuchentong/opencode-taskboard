@@ -32,7 +32,7 @@ export function cycleThemeMode(): void {
 }
 
 /**
- * 订阅 themeMode，把解析后的主题写到 document.documentElement.dataset.theme；
+ * 订阅 themeMode，把解析后的主题写到 documentElement 的 dark 类（shadcn 约定）；
  * auto 模式下监听 prefers-color-scheme 变化实时跟随。
  * 返回清理函数（测试 / HMR 用）。
  */
@@ -41,7 +41,7 @@ export function initTheme(): () => void {
 
   const apply = (mode: ThemeMode) => {
     current = mode
-    document.documentElement.dataset.theme = resolveTheme(mode)
+    document.documentElement.classList.toggle("dark", resolveTheme(mode) === "dark")
     try {
       localStorage.setItem(STORAGE_KEY, mode)
     } catch {
@@ -52,7 +52,7 @@ export function initTheme(): () => void {
   const unsubscribe = themeMode.subscribe(apply)
 
   const onSystemChange = () => {
-    if (current === "auto") document.documentElement.dataset.theme = resolveTheme("auto")
+    if (current === "auto") document.documentElement.classList.toggle("dark", resolveTheme("auto") === "dark")
   }
   darkQuery?.addEventListener("change", onSystemChange)
 
