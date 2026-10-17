@@ -203,16 +203,37 @@ export function initDispatcher(
 
   const takeSeq = (): number => ++maps.seqCounter
 
-  /** 沿处理(实时,不防抖):沿 diff → metrics → advance */
+  /** act 失败的沿:每轮 processAlong 重放,成功出队(审查 I-3:失败下轮自动重发) */
+  let retryAlong: TaskTransition[] = []
+
+  /** 沿处理(实时,不防抖):重放失败队列 → 沿 diff → metrics → advance */
   const processAlong = async (tasks: Task[]): Promise<void> => {
     await loaded
+    // 1. 重放失败队列:任务已删除的沿直接弃;仍失败的留在队列
+    if (retryAlong.length > 0) {
+      const still: TaskTransition[] = []
+      let acted = false
+      for (const t of retryAlong) {
+        const task = tasks.find((x) => x.id === t.taskID)
+        if (!task) continue
+        const outcome = await runAdvance(rules, t, task, advanceCtx)
+        if (outcome === "failed") still.push(t)
+        else acted = true // 水位推进(或已处理/无会话),出队
+      }
+      retryAlong = still
+      if (acted) persist()
+    }
+    // 2. 新沿
     const along = extractTransitions(maps.lastSeen, tasks, takeSeq)
     if (along.length === 0) return
     for (const t of along) {
       const task = tasks.find((x) => x.id === t.taskID)
       if (!task) continue
       await metrics.applyTransition(t, task)
-      await runAdvance(rules, t, task, advanceCtx)
+      // 沿到达即时结算:to ≠ pending 的沿意味着任务离开待领取,在途名额零延迟释放
+      if (t.to !== "pending") pool.settleByTask(t.taskID)
+      const outcome = await runAdvance(rules, t, task, advanceCtx)
+      if (outcome === "failed") retryAlong.push(t)
     }
     persist()
   }
@@ -223,6 +244,7 @@ export function initDispatcher(
     if (result === "ok") {
       lastDispatchAt = Date.now()
       todayCount++
+      createFailStreak = 0 // 连败语义:成功即断链,孤立失败不吃历史翻倍退避(审查 M-5)
       await ctx.storage.set(dailyKey(), todayCount)
       deps.log(`派发完成(当日第 ${todayCount} 次)task=${task.id}`)
       trigger.requestInternal("dispatched")
@@ -270,6 +292,22 @@ export function initDispatcher(
     }
 
     const tasks = await deps.store.list()
+
+    // 差集清理:沿状态里已不在看板上的任务 = 已删除(审查 I-2:非在途任务删除
+    // 不经 pool 的 onTaskGone,必须在此兜底,否则 blob 随历史任务单调膨胀)
+    const liveIDs = new Set(tasks.map((t) => t.id))
+    let goneAny = false
+    for (const id of [...maps.lastSeen.keys()]) {
+      if (!liveIDs.has(id)) {
+        maps.lastSeen.delete(id)
+        maps.lastActedSeq.delete(id)
+        maps.rounds.delete(id)
+        maps.taskBackoff.delete(id)
+        goneAny = true
+        deps.log(`任务已删除,沿状态键已清理 task=${id}`)
+      }
+    }
+    if (goneAny) persist()
 
     // 终结任务补一次消耗:此刻读数才是完整的
     await metrics.flushTerminal(tasks)

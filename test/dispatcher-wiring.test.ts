@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { DISPATCH_CAPS, initDispatcher, type DispatcherSession } from "../src/dispatcher/index"
 import { createStore, memoryBackend, type Store } from "../src/store"
 import type { Task } from "../src/types"
+import type { Task } from "../src/types"
 
 // 把任务推进到 pending 的人工路径
 async function toPending(s: Store, title: string): Promise<Task> {
@@ -92,7 +93,17 @@ function harness(
       evaluateTickMs: opts.evaluateTickMs ?? 0, // 默认关掉：兜底 tick 会干扰断言，只在专门的用例里开
     },
   )
-  return { d, store, storage, session, lines, broadcasts, fire: () => registered?.(), entries }
+  return {
+    d,
+    store,
+    storage,
+    session,
+    lines,
+    broadcasts,
+    // 带载荷触发(计划任务 7:对齐 server 真实链路,沿处理走实时路径);缺省时拉全量
+    fire: async (tasks?: Task[]) => registered?.(tasks ?? (await store.list())),
+    entries,
+  }
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))

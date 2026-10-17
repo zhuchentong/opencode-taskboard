@@ -110,6 +110,48 @@ describe("engine 装配(沿驱动 initDispatcher)", () => {
     h.d.dispose()
   })
 
+  test("confirm-off(默认配置)下 analyze 直落 executing 不误发执行唤醒(I-1 回归钉子)", async () => {
+    const h = harness({ claimWaitMs: 5_000 })
+    await h.store.setSettings({ autoDispatch: false, requireAnalysisConfirm: false })
+    const t = await toPending(h.store, "直落任务")
+    // 人工 claim:首观测(analyzing)
+    await h.store.claim({ id: t.id, sessionID: "ses_w1", agent: "build" })
+    await h.fire() // 载荷路径:首观测零沿
+    await sleep(30)
+    await h.store.analyze({ id: t.id, sessionID: "ses_w1", analysis: "a" }) // confirm-off:直落 executing
+    await h.fire() // 载荷路径:沿 analyzing→executing —— 旧 "*" 规则会在此误发唤醒
+    await sleep(30)
+    expect(h.session.prompts).toHaveLength(0)
+    h.d.dispose()
+  })
+
+  test("唤醒 act 失败后沿自动重发:恢复后同状态 fire 必补唤醒(I-3 回归钉子)", async () => {
+    const h = harness({ claimWaitMs: 5_000 })
+    await h.store.setSettings({ autoDispatch: true, requireAnalysisConfirm: true })
+    const t = await toPending(h.store, "瞬断任务")
+    await h.store.claim({ id: t.id, sessionID: "ses_w1", agent: "build" })
+    await h.store.analyze({ id: t.id, sessionID: "ses_w1", analysis: "a" })
+    await h.fire() // 首观测
+    await sleep(30)
+    // 瞬断:放行沿到达时 prompt 抛错
+    const original = h.session.prompt
+    h.session.prompt = async () => {
+      throw new Error("transient api down")
+    }
+    await h.store.patch(t.id, { action: "confirm" })
+    await h.fire()
+    await sleep(30)
+    expect(h.session.prompts.length).toBe(0)
+    expect(h.lines.some((l) => l.includes("执行唤醒失败"))).toBe(true)
+    // API 恢复:同状态(无新沿)fire → 重试队列重放 → 必须补唤醒,否则 worker 永久停在等唤醒
+    h.session.prompt = original
+    await h.fire()
+    await sleep(30)
+    expect(h.session.prompts.length).toBe(1)
+    expect(h.session.prompts[0].text).toContain("已放行")
+    h.d.dispose()
+  })
+
   test("沿驱动唤醒接线:写事件载荷触发 analysis_confirm→executing 沿唤醒一次", async () => {
     const h = harness({ claimWaitMs: 5_000 })
     await h.store.setSettings({ autoDispatch: true, requireAnalysisConfirm: true })
@@ -145,6 +187,46 @@ describe("engine 装配(沿驱动 initDispatcher)", () => {
     expect(bRemain).toBeLessThan(aRemain) // B 首次 1 档(200ms),不吃 A 的 2 档(400ms)
     h.d.dispose()
   }, 3000)
+
+  test("建会话失败连败在派发成功后归零:孤立失败不再吃历史翻倍退避(M-5 回归钉子)", async () => {
+    const h = harness({ claimWaitMs: 5_000, backoffBaseMs: 200 })
+    await h.store.setSettings({ autoDispatch: true })
+    // 第一段:create 恒败 → streak=1,create-fail 冷却 ≈ 200ms(1 档)
+    h.session.create = async () => {
+      throw new Error("配额耗尽")
+    }
+    const t1 = await toPending(h.store, "失败一")
+    await h.fire()
+    await sleep(40)
+    const first = h.d.status().cooldownRemainMs
+    expect(first).toBeGreaterThan(0)
+    // 恢复:等冷却过期后派发成功 → createFailStreak 归零
+    const realCreate = async (input?: { title?: string; location?: { directory: string } }) => {
+      const id = `ses_ok${h.session.created.length + 1}`
+      h.session.created.push({ id, title: input?.title, directory: input?.location?.directory })
+      return { id, title: input?.title }
+    }
+    h.session.create = realCreate
+    await sleep(400)
+    const t2 = await toPending(h.store, "成功一")
+    await h.fire()
+    await sleep(60)
+    expect(h.session.prompts.some((p) => p.text.includes(t2.id))).toBe(true) // 成功派出
+    // 第二段:再败 → 归零后应为 1 档(≈200ms);若没归零会吃 2 档(≈400ms)
+    h.session.create = async () => {
+      throw new Error("又挂了")
+    }
+    await sleep(400)
+    const t3 = await toPending(h.store, "失败二")
+    await h.fire()
+    await sleep(40)
+    const second = h.d.status().cooldownRemainMs
+    expect(second).toBeGreaterThan(100)
+    expect(second).toBeLessThan(300)
+    void t1
+    void t3
+    h.d.dispose()
+  }, 4000)
 
   test("status() 只增:旧字段全在,新增 lastSkipReason 与 taskCooldowns", async () => {
     const h = harness()
@@ -259,6 +341,24 @@ describe("engine 装配(沿驱动 initDispatcher)", () => {
     await h.fire()
     await sleep(50)
     expect(h.session.prompts.some((p) => p.text.includes(fresh.id))).toBe(true)
+    h.d.dispose()
+  })
+
+  test("非在途任务删除同样清理沿状态键:blob 不随历史任务单调膨胀(I-2 回归钉子)", async () => {
+    const h = harness({ claimWaitMs: 5_000 })
+    await h.store.setSettings({ autoDispatch: true })
+    // analyzing(非在途:不在 awaitingClaims)任务被删 —— 旧 sweep 只遍历在途表,清不到它
+    const t = await toPending(h.store, "非在途删除")
+    await h.store.claim({ id: t.id, sessionID: "ses_ext", agent: "human" })
+    await h.fire()
+    await sleep(30)
+    expect(JSON.parse(String(h.entries["p1/dispatcher/along-state"])).lastSeen[t.id]).toBe("analyzing")
+    await h.store.remove(t.id)
+    await h.fire()
+    await sleep(30)
+    const blob = JSON.parse(String(h.entries["p1/dispatcher/along-state"]))
+    expect(blob.lastSeen[t.id]).toBeUndefined()
+    expect(blob.lastActedSeq[t.id]).toBeUndefined()
     h.d.dispose()
   })
 

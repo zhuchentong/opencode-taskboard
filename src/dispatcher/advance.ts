@@ -19,7 +19,11 @@ export interface AdvanceRuleSpec {
 
 /** 内置规则注册表:未来「轮次上限熔断」「卡死自愈」等只加 spec + 构建分支 */
 export const BUILTIN_RULES: AdvanceRuleSpec[] = [
-  { name: "execute-nudge", label: "执行唤醒", on: { from: "*", to: "executing" } },
+  // from 收窄为 analysis_confirm:沿区分不了「用户放行」与「confirm-off 下 analyze 直落」,
+  // from:"*" 会在默认配置(requireAnalysisConfirm:false)下每任务误发一枪唤醒(审查 I-1)。
+  // 「多次跳转」场景(analyzing↔analysis_confirm 往复后再放行)每次都经过 analysis_confirm,
+  // 收窄不影响多轮唤醒的正确性。
+  { name: "execute-nudge", label: "执行唤醒", on: { from: "analysis_confirm", to: "executing" } },
   {
     name: "reanalyze-nudge",
     label: "重析唤醒",
@@ -61,25 +65,32 @@ export function makeBuiltinRules(deps: {
 
 /**
  * 消费一条转移沿:命中规则的 on → 幂等检查 → act → 成功才推进水位。
- * act 失败记日志、不推进 —— 同沿下轮评估自动重发。
+ * 返回消费结果供引擎决定是否入重试队列:
+ * - "acted":命中且 act 成功(水位已推进)
+ * - "skipped":已处理过(shouldAct 为 false)或无会话等免唤醒场景
+ * - "no-match":无规则命中(沿静默忽略)
+ * - "failed":act 抛错 —— 水位未推进,**调用方必须保留该沿待重发**,
+ *   否则瞬断一次 worker 就永久停在等唤醒(审查 I-3)。
  */
 export async function runAdvance(
   rules: AdvanceRule[],
   t: TaskTransition,
   task: Task,
   ctx: { shouldAct(t: TaskTransition): boolean; markActed(t: TaskTransition): void; log(m: string): void },
-): Promise<void> {
+): Promise<"acted" | "skipped" | "no-match" | "failed"> {
   for (const rule of rules) {
     if (rule.on.to !== t.to) continue
     if (rule.on.from !== undefined && rule.on.from !== "*" && rule.on.from !== t.from) continue
-    if (!ctx.shouldAct(t)) continue
+    if (!ctx.shouldAct(t)) return "skipped"
     const label = BUILTIN_RULES.find((s) => s.name === rule.name)?.label ?? rule.name
     try {
       await rule.act(task, ctx.log)
       ctx.markActed(t)
+      return "acted"
     } catch (e) {
       ctx.log(`${label}失败:${e instanceof Error ? e.message : String(e)}`)
+      return "failed"
     }
-    return // 一条沿至多命中一条规则(规则表按 to 互斥)
   }
+  return "no-match" // 一条沿至多命中一条规则(规则表按 to 互斥)
 }

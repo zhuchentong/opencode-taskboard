@@ -122,7 +122,7 @@ interface AdvanceRule {
 }
 ```
 
-首发两条:**执行唤醒**(`* → executing`,每次放行都触发,修复多轮卡死)、**重析唤醒**(`analysis_confirm → analyzing`,同会话续用,提示词携带该任务最近用户评论作为答复)。
+首发两条(**execute-nudge 的 from 收窄为 `analysis_confirm`**——沿区分不了「用户放行」与「confirm-off 下 analyze 直落」,`from: "*"` 会在默认配置下每任务误发一枪唤醒,最终审查 I-1 实证后修订):**执行唤醒**(`analysis_confirm → executing`,每次放行都触发,修复多轮卡死;问答循环的每次再放行都经过 analysis_confirm,收窄不影响多轮正确性)、**重析唤醒**(`analysis_confirm → analyzing`,同会话续用,提示词携带该任务最近用户评论作为答复)。
 
 future 注册位(引擎不动,只加规则):轮次上限熔断、完成打回提示(`completion_confirm → pending`)、卡死自愈(有 claim 停滞超阈值告警/补唤醒)、执行期问答、worker 撤回 ask。
 
