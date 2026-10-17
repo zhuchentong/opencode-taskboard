@@ -42,20 +42,21 @@
 </script>
 
 <section
-  class="lane flex flex-col gap-2 rounded-lg border bg-card/50 p-3 {isOver ? 'drag-over' : ''}"
+  class="lane flex min-h-0 flex-1 flex-col gap-2 rounded-lg border bg-card/50 p-3 {isOver ? 'drag-over' : ''}"
   data-status={status}
   aria-label={`泳道：${label}`}
 >
-  <h2 class="flex items-center gap-1.5 text-[13px] font-medium text-foreground">
+  <h2 class="flex flex-none items-center gap-1.5 text-[13px] font-medium text-foreground">
     <span class="size-2 rounded-full {DOT_BY_STATUS[status] ?? 'bg-muted-foreground/60'}"></span>
     {label}
     <Badge variant="secondary" class="px-1.5 text-[11px] text-muted-foreground">{tasks.length}</Badge>
   </h2>
   {#if tasks.length === 0 && !isOver}
-    <p class="flex min-h-10 items-center text-xs text-muted-foreground/70">{empty ?? ""}</p>
+    <p class="flex flex-none min-h-10 items-center text-xs text-muted-foreground/70">{empty ?? ""}</p>
   {/if}
   <!-- 空泳道也保留卡片容器：拖入第一张卡的落点 -->
-  <div class="cards flex min-h-10 flex-wrap gap-2.5">
+  <!-- 空泳道也保留卡片容器：拖入第一张卡的落点；等高泳道下溢出在泳道内滚动 -->
+  <div class="cards flex min-h-0 flex-1 flex-wrap content-start gap-2.5 overflow-y-auto">
     {#each tasks as task, i (task.id)}
       {#if dropIndex === i}
         <div class="drop-line w-[3px] self-stretch rounded-sm bg-primary" aria-hidden="true"></div>

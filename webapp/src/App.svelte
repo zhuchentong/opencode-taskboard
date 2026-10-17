@@ -193,40 +193,42 @@
   }
 </script>
 
-<Header
-  settings={board.settings}
-  {conn}
-  {mode}
-  modeLabel={MODE_LABEL[mode]}
-  oncreate={handleCreate}
-  ontoggle={handleToggle}
-  ondispatch={(autoDispatch: boolean) => void changeSettings({ autoDispatch })}
-  onsetmode={setThemeMode}
-/>
-
-{#if loaded}
-  <Board
-    tasks={visible}
-    pendingIds={board.pending}
-    flashIds={flashIds}
-    onopen={openDetail}
-    onconfirm={quickConfirm}
-    onquickreject={quickReject}
-    onmove={moveTask}
+<div class="flex h-dvh flex-col overflow-hidden">
+  <Header
+    settings={board.settings}
+    {conn}
+    {mode}
+    modeLabel={MODE_LABEL[mode]}
+    oncreate={handleCreate}
+    ontoggle={handleToggle}
+    ondispatch={(autoDispatch: boolean) => void changeSettings({ autoDispatch })}
+    onsetmode={setThemeMode}
   />
-{:else}
-  <main class="mx-auto flex max-w-7xl flex-col gap-2.5 p-4" aria-label="加载中">
-    {#each Array(7) as _, i (i)}
-      <div class="flex items-center gap-2.5 rounded-lg border p-3">
-        <Skeleton class="h-3.5 w-22" />
-        <div class="flex flex-1 flex-wrap gap-2.5">
-          <Skeleton class="h-24 w-60" />
-          <Skeleton class="h-24 w-60" />
+
+  {#if loaded}
+    <Board
+      tasks={visible}
+      pendingIds={board.pending}
+      flashIds={flashIds}
+      onopen={openDetail}
+      onconfirm={quickConfirm}
+      onquickreject={quickReject}
+      onmove={moveTask}
+    />
+  {:else}
+    <main class="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-2.5 overflow-hidden p-4" aria-label="加载中">
+      {#each Array(7) as _, i (i)}
+        <div class="flex flex-1 items-center gap-2.5 rounded-lg border p-3">
+          <Skeleton class="h-3.5 w-22" />
+          <div class="flex flex-1 flex-wrap gap-2.5">
+            <Skeleton class="h-24 w-60" />
+            <Skeleton class="h-24 w-60" />
+          </div>
         </div>
-      </div>
-    {/each}
-  </main>
-{/if}
+      {/each}
+    </main>
+  {/if}
+</div>
 
 {#if detailTask}
   <TaskDetail

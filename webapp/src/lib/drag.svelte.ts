@@ -85,6 +85,17 @@ function onPointerMove(e: PointerEvent) {
   if (e.clientY < EDGE) window.scrollBy(0, -14)
   else if (e.clientY > window.innerHeight - EDGE) window.scrollBy(0, 14)
 
+  // 等高泳道内部滚动：拖到泳道上下缘时滚该泳道的卡片流（卡片溢出泳道后仍可达）
+  if (col) {
+    const rect = col.getBoundingClientRect()
+    const cards = col.querySelector(".cards")
+    const ZONE = 40
+    if (cards) {
+      if (e.clientY < rect.top + ZONE) cards.scrollBy(0, -12)
+      else if (e.clientY > rect.bottom - ZONE) cards.scrollBy(0, 12)
+    }
+  }
+
   const stack = document.elementsFromPoint(e.clientX, e.clientY) as HTMLElement[]
   const col = stack.find((n) => n.dataset?.status && n.classList.contains("lane"))
   if (!col) {
