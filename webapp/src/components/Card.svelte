@@ -40,7 +40,8 @@
   const draggable = $derived(
     !(task.claim && task.claim.agent !== "human" && (task.status === "analyzing" || task.status === "executing")),
   )
-  // svelte-dnd-action 拖拽预览时塞入的占位影子项流经本组件：只渲染占位样式，按钮禁点
+  // svelte-dnd-action 拖拽预览时塞入的占位影子项流经本组件：
+  // 不渲染完整卡片（免得半透明白卡浮着），渲染虚线占位框——同时充当「会插到这里」的位置指示
   const isShadow = $derived((task as Record<symbol, unknown>)[SHADOW_ITEM_MARKER_PROPERTY_NAME] === true)
   const inflight = $derived(pendingIds?.has(task.id) ?? false)
   const failFlash = $derived(flashIds?.has(task.id) ?? false)
@@ -81,6 +82,10 @@
   })
 </script>
 
+{#if isShadow}
+  <!-- 插入位置指示：虚线占位框（高度近似卡片，避免让位跳动过大） -->
+  <div class="h-24 w-60 rounded-lg border-2 border-dashed border-primary/50 bg-primary/5" aria-hidden="true"></div>
+{:else}
 <article
   data-task-id={task.id}
   class="group/card w-60 rounded-lg border border-l-4 bg-card p-3 text-card-foreground grid gap-1.5 text-sm cursor-pointer content-start {band} {task.status === 'done' ? 'opacity-80' : ''} {inflight ? 'opacity-60 animate-pulse' : ''} {isShadow ? 'opacity-50' : ''} {failFlash ? 'fail-flash' : ''} hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring outline-none {draggable ? '' : 'cursor-not-allowed'}"
@@ -141,6 +146,7 @@
     </div>
   {/if}
 </article>
+{/if}
 
 <style>
   /* 失败红闪：乐观写失败的一拍提示（动画结束自动消失，类由 App 在 650ms 后摘除） */

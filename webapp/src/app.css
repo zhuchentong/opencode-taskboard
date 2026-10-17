@@ -94,3 +94,13 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ============ svelte-dnd-action 拖拽视觉 ============ */
+/* 拖动中的原元素被库移动跟随光标（id 由库的 DRAGGED_ELEMENT_ID 钉死）：拖影化 */
+#dnd-action-dragged-el {
+  opacity: 0.85;
+  box-shadow: 0 12px 28px rgb(0 0 0 / 0.35);
+  rotate: 1deg;
+  cursor: grabbing;
+  pointer-events: none;
+}

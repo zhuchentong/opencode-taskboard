@@ -45,7 +45,7 @@
     items = tasks
   })
 
-  const flipDurationMs = 150
+  const flipDurationMs = 80
 
   function handleConsider(e: DndEvent<Task>) {
     items = e.detail.items // 纯视觉重排预览

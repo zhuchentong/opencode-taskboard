@@ -6,11 +6,17 @@ import { readFileSync } from "node:fs"
 const card = readFileSync(new URL("../src/components/Card.svelte", import.meta.url), "utf8")
 const detail = readFileSync(new URL("../src/components/TaskDetail.svelte", import.meta.url), "utf8")
 
+const lane = readFileSync(new URL("../src/components/Lane.svelte", import.meta.url), "utf8")
+
 describe("回归基线载体标记", () => {
   test("Card 根元素带 data-task-id（closeDetail 焦点返还的查询锚点）", () => {
     expect(card).toContain('data-task-id={task.id}')
   })
   test("TaskDetail 关闭 Sheet 内置关闭按钮（避免与自绘 ✕ 重叠成双）", () => {
     expect(detail).toContain("showCloseButton={false}")
+  })
+  test("拖拽占位影子项渲染虚线占位框而非完整卡片（插入位置指示）", () => {
+    expect(card).toContain("border-dashed border-primary/50")
+    expect(lane).toContain("flipDurationMs = 80")
   })
 })
