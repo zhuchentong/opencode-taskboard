@@ -186,6 +186,20 @@ describe("REST API", () => {
     const deny = await fetch(`${base}/api/tasks/task_x`, { method: "DELETE", headers: { "X-Taskboard-Token": "wrong" } })
     expect(deny.status).toBe(403)
   })
+
+  test("GET /api/tasks/:id 返回单条；未知 id → 404", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    const base = setup(s)
+    const created = await (await fetch(`${base}/api/tasks`, { method: "POST", headers: H, body: JSON.stringify({ title: "单查" }) })).json()
+
+    const one = await fetch(`${base}/api/tasks/${created.id}`)
+    expect(one.status).toBe(200)
+    expect(((await one.json()) as { id: string }).id).toBe(created.id)
+
+    const miss = await fetch(`${base}/api/tasks/task_nope`)
+    expect(miss.status).toBe(404)
+    expect(((await miss.json()) as { error: { code: string } }).error.code).toBe("not_found")
+  })
 })
 
 describe("工具操作代理路由", () => {

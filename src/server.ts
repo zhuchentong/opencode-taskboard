@@ -258,6 +258,7 @@ export function createServer(
     const taskMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/)
     if (taskMatch) {
       const id = decodeURIComponent(taskMatch[1])
+      if (method === "GET") return Response.json(await store.get(id))
       if (method === "PATCH") {
         const bad = guard(req)
         if (bad) return bad

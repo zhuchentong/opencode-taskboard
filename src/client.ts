@@ -44,10 +44,7 @@ export function clientStore(base: string, token: string, opts?: { timeoutMs?: nu
       return call<Task[]>("/api/tasks")
     },
     async get(id) {
-      const list = await call<Task[]>("/api/tasks")
-      const hit = list.find((t) => t.id === id)
-      if (!hit) throw new StoreError("not_found", `任务不存在：${id}`)
-      return hit
+      return call<Task>(`/api/tasks/${encodeURIComponent(id)}`)
     },
     async create(input) {
       return call<Task>("/api/tasks", { method: "POST", body: JSON.stringify(input) })
