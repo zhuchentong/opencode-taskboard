@@ -1,18 +1,30 @@
 <script lang="ts">
   import { onMount } from "svelte"
   import { get } from "svelte/store"
-  import { cycleThemeMode, themeMode, type ThemeMode } from "./theme"
+  import { setKeyboardDragTrigger, setAriaStrings } from "svelte-dnd-action"
+  import { setThemeMode, themeMode, type ThemeMode } from "./theme"
   import { fetchBoard, createTask, putSettings, patchTask, deleteTask, BoardApiError, type ConnState } from "./lib/api"
   import { applySnapshot, beginOptimistic, emptyState, settle, visibleTasks, type BoardState } from "./lib/optimistic"
-import { STATUSES } from "./lib/board"
+  import { STATUSES } from "./lib/board"
   import { notify } from "./lib/notify"
   import { needsTicker } from "./lib/duration"
   import { startTicker, stopTicker } from "./lib/ticker.svelte"
   import { connectEvents } from "./lib/events"
+  import { Skeleton } from "$lib/components/ui/skeleton"
+  import { Toaster } from "$lib/components/ui/sonner"
   import Header from "./components/Header.svelte"
   import Board from "./components/Board.svelte"
   import TaskDetail from "./components/TaskDetail.svelte"
+  import ConfirmDialog from "./components/ConfirmDialog.svelte"
   import type { Status, Task } from "./lib/types"
+
+  // dnd 全局配置：Enter 留给打开详情，键盘拖拽仅 Space 起拖；屏幕阅读器文案中文化
+  setKeyboardDragTrigger("space")
+  setAriaStrings({
+    dragStarted: ({ itemLabel }) => `已开始拖动「${itemLabel}」，用方向键移动，Tab 切换泳道，空格放下`,
+    movedToPosition: ({ itemLabel, zoneLabel, position }) => `「${itemLabel}」已移至「${zoneLabel}」第 ${position} 位`,
+    dropped: ({ itemLabel, zoneLabel, position, count }) => `「${itemLabel}」已放入「${zoneLabel}」，第 ${position} 位，共 ${count} 项`,
+  })
 
   const MODE_LABEL: Record<ThemeMode, string> = {
     auto: "主题：跟随系统",
@@ -29,7 +41,7 @@ import { STATUSES } from "./lib/board"
 
   const visible = $derived(visibleTasks(board))
   const detailTask = $derived(detailId ? (visible.find((t) => t.id === detailId) ?? null) : null)
-  // 乐观写入的视觉态：在途（半透明+shimmer）与失败回滚（红闪一拍）
+  // 乐观写入的视觉态：在途（半透明+pulse）与失败回滚（红闪一拍）
   let flashIds = $state<Set<string>>(new Set())
 
   function flashFail(taskId: string) {
@@ -108,7 +120,7 @@ import { STATUSES } from "./lib/board"
       }
       refresh()
     } catch (e) {
-      notify("error", `删除失败：${e.message}`)
+      notify("error", `删除失败：${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
@@ -151,6 +163,7 @@ import { STATUSES } from "./lib/board"
     else stopTicker()
   })
 
+  // 拖拽落定与键盘移动同一乐观通道
   function handleDrop(taskId: string, toStatus: Status) {
     writeTask(taskId, { status: toStatus }, { status: toStatus }, "移动失败")
   }
@@ -163,7 +176,7 @@ import { STATUSES } from "./lib/board"
         notify("success", `任务已创建（${t.id}）`)
       })
       .catch((e) => {
-        notify("error", `创建失败：${e.message}`)
+        notify("error", `创建失败：${e instanceof Error ? e.message : String(e)}`)
         throw e
       })
   }
@@ -180,12 +193,10 @@ import { STATUSES } from "./lib/board"
       .then(refresh)
       .catch((e) => {
         board = applySnapshot(board, board.server, prev)
-        notify("error", `设置失败：${e.message}`)
+        notify("error", `设置失败：${e instanceof Error ? e.message : String(e)}`)
         throw e
       })
   }
-
-
 </script>
 
 <Header
@@ -196,7 +207,7 @@ import { STATUSES } from "./lib/board"
   oncreate={handleCreate}
   ontoggle={handleToggle}
   ondispatch={(autoDispatch: boolean) => void changeSettings({ autoDispatch })}
-  oncyclemode={cycleThemeMode}
+  onsetmode={setThemeMode}
 />
 
 {#if loaded}
@@ -208,15 +219,17 @@ import { STATUSES } from "./lib/board"
     onconfirm={quickConfirm}
     onquickreject={quickReject}
     onmove={moveTask}
+    ondrop={handleDrop}
   />
 {:else}
-  <main class="board skeleton" aria-label="加载中">
+  <main class="mx-auto flex max-w-7xl flex-col gap-2.5 p-4" aria-label="加载中">
     {#each Array(7) as _, i (i)}
-      <div class="skel-col">
-        <div class="skel-head"></div>
-        {#each Array(2) as _, j (j)}
-          <div class="skel-card"></div>
-        {/each}
+      <div class="flex items-center gap-2.5 rounded-lg border p-3">
+        <Skeleton class="h-3.5 w-22" />
+        <div class="flex flex-1 flex-wrap gap-2.5">
+          <Skeleton class="h-24 w-60" />
+          <Skeleton class="h-24 w-60" />
+        </div>
       </div>
     {/each}
   </main>
@@ -232,43 +245,5 @@ import { STATUSES } from "./lib/board"
   />
 {/if}
 
-<style>
-  .skeleton {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 12px 16px;
-    max-width: 1280px;
-    margin: 0 auto;
-  }
-  .skel-col {
-    background: var(--col);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: 10px 12px;
-    display: flex;
-    gap: 10px;
-    align-items: center;
-  }
-  .skel-head {
-    height: 14px;
-    width: 88px;
-    border-radius: 6px;
-  }
-  .skel-card {
-    height: 72px;
-    width: 240px;
-  }
-  .skel-head,
-  .skel-card {
-    border-radius: 6px;
-    background: linear-gradient(100deg, var(--line) 40%, var(--card) 50%, var(--line) 60%);
-    background-size: 200% 100%;
-    animation: shimmer 1.2s infinite;
-  }
-  @keyframes shimmer {
-    to {
-      background-position: -200% 0;
-    }
-  }
-</style>
+<Toaster richColors position="bottom-right" />
+<ConfirmDialog />

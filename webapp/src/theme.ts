@@ -31,6 +31,11 @@ export function cycleThemeMode(): void {
   themeMode.update((m) => (m === "auto" ? "light" : m === "light" ? "dark" : "auto"))
 }
 
+/** 直接指定主题（Header 的主题菜单用） */
+export function setThemeMode(mode: ThemeMode): void {
+  themeMode.set(mode)
+}
+
 /**
  * 订阅 themeMode，把解析后的主题写到 documentElement 的 dark 类（shadcn 约定）；
  * auto 模式下监听 prefers-color-scheme 变化实时跟随。
