@@ -31,7 +31,6 @@ import {
 import { buildDispatchPrompt } from "./prompt"
 import { createSessionPool } from "./session-pool"
 import {
-  emptyAlongState,
   extractTransitions,
   loadAlongState,
   markActed,
@@ -239,6 +238,7 @@ export function initDispatcher(
   }
 
   const dispatchFrontier = async (task: Task): Promise<void> => {
+    if (disposed) return // 排空循环卡在 await 期间卸载:不再新建会话(终审 M-3)
     const workerName = `w${++workerSeq}`
     const result = await pool.dispatch(task, workerName, buildDispatchPrompt(task))
     if (result === "ok") {
@@ -246,7 +246,7 @@ export function initDispatcher(
       todayCount++
       createFailStreak = 0 // 连败语义:成功即断链,孤立失败不吃历史翻倍退避(审查 M-5)
       await ctx.storage.set(dailyKey(), todayCount)
-      deps.log(`派发完成(当日第 ${todayCount} 次)task=${task.id}`)
+      deps.log(`派发完成（当日第 ${todayCount} 次）task=${task.id}`)
       trigger.requestInternal("dispatched")
       return
     }
@@ -270,7 +270,7 @@ export function initDispatcher(
     // 设置复位:关开 autoDispatch 清全部失败状态并落盘
     const settings = await deps.store.getSettings()
     if (settings.autoDispatch && !lastEnabled) {
-      if (isPaused() || failStreak > 0 || timeoutStreak > 0 || Object.keys(maps.taskBackoff).length > 0) {
+      if (isPaused() || failStreak > 0 || timeoutStreak > 0 || maps.taskBackoff.size > 0) {
         deps.log("自动领取重新开启,失败状态复位")
       }
       globalPhase = { kind: "running" }

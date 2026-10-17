@@ -50,7 +50,7 @@ export function createSessionPool(deps: SessionPoolDeps) {
     if (!entry) return
     clearTimeout(entry.timer)
     awaiting.delete(taskID)
-    deps.log(`释放名额 task=${taskID}(taskID 索引)(${why})`)
+    deps.log(`释放名额 task=${taskID}（${why}）`)
   }
 
   /** 回收会话:派发失败、超时、任务已删除等不再需要它的场景。删会话是破坏性操作,容错静默。 */
@@ -67,7 +67,7 @@ export function createSessionPool(deps: SessionPoolDeps) {
   const settleByTask = (taskID: string): void => {
     const entry = awaiting.get(taskID)
     if (!entry) return
-    deps.log(`已领取 task=${taskID}(派发→领取 ${Math.round((Date.now() - entry.sentAt) / 1000)}s)`)
+    deps.log(`已领取 task=${taskID}（派发→领取 ${Math.round((Date.now() - entry.sentAt) / 1000)}s）`)
     releaseEntry(taskID, "已领取/流转")
     deps.onSettled(taskID, { sessionID: entry.sessionID, sentAt: entry.sentAt })
   }
@@ -110,6 +110,10 @@ export function createSessionPool(deps: SessionPoolDeps) {
   return {
     /** 派发:建会话 → 登记在途 → 发提示词(text 由 engine 经 prompt.ts 构建)。返回结果供 engine 记对应连败口径。 */
     async dispatch(task: Task, workerName: string, text: string): Promise<DispatchOutcome> {
+      if (disposed) {
+        deps.log(`派发器已卸载,跳过派发 task=${task.id}`)
+        return "create-fail"
+      }
       let sessionID: string
       try {
         const info = await deps.session.create({
