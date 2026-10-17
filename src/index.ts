@@ -32,16 +32,24 @@ export async function safeRegister(handle: { stop(): void }, fns: Array<() => Pr
   }
 }
 
-async function arbitrate(opts: {
+/** 探测端口上的 taskboard health（2s 超时）；非 JSON / 无响应 / 拒绝连接一律 undefined */
+async function probeHealth(port: number): Promise<{ ok?: boolean; primary?: boolean; projectID?: string } | undefined> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(2000) })
+    return (await res.json()) as { ok?: boolean; primary?: boolean; projectID?: string }
+  } catch {
+    return undefined
+  }
+}
+
+export async function arbitrate(opts: {
   port: number
   token: string
   webDir: string
   projectID: string
   localStore: Store
-  proxyStore: Store
   log: (m: string) => void
   logs: () => readonly string[]
-  /** 延迟绑定的写观察者（自动派发器在仲裁后装配） */
   hooks: { onWrite?: () => void }
 }): Promise<{ handle: ServerHandle; store: Store; primary: boolean; primaryPort: number }> {
   const tryBind = (p: number, store: Store, primary: boolean): ServerHandle | undefined => {
@@ -60,37 +68,41 @@ async function arbitrate(opts: {
     }
   }
 
+  /** 在代理目标 primaryPort 上构造次要实例（代理 Store 就地构造，目标可能是上移后的主实例端口） */
+  const bindSecondary = (primaryPort: number) => {
+    const proxyStore = clientStore(`http://127.0.0.1:${primaryPort}`, opts.token)
+    for (let p = opts.port + 1; p < opts.port + PORT_SCAN_TRIES; p++) {
+      const h = tryBind(p, proxyStore, false)
+      if (h) {
+        opts.log(`次要实例：写操作代理到 ${primaryPort}，本实例端口 ${p}`)
+        return { handle: h, store: proxyStore, primary: false, primaryPort }
+      }
+    }
+    throw new Error(`[taskboard] 无法为次要实例找到可用端口（${opts.port + 1}..${opts.port + PORT_SCAN_TRIES - 1}）`)
+  }
+
   const first = tryBind(opts.port, opts.localStore, true)
   if (first) {
     opts.log(`主实例绑定基准端口 ${opts.port}`)
     return { handle: first, store: opts.localStore, primary: true, primaryPort: opts.port }
   }
 
-  let secondary = false
-  try {
-    const res = await fetch(`http://127.0.0.1:${opts.port}/api/health`)
-    const health = await res.json()
-    secondary = shouldProxy(health, opts.projectID)
-  } catch {
-    secondary = false
-  }
+  // 基准端口忙：若确为本项目主实例 → 降级次要实例（spec §9）
+  const baseHealth = await probeHealth(opts.port)
+  if (shouldProxy(baseHealth, opts.projectID)) return bindSecondary(opts.port)
 
-  if (secondary) {
-    for (let p = opts.port + 1; p < opts.port + PORT_SCAN_TRIES; p++) {
-      const h = tryBind(p, opts.proxyStore, false)
-      if (h) {
-        opts.log(`次要实例：写操作代理到 ${opts.port}，本实例端口 ${p}`)
-        return { handle: h, store: opts.proxyStore, primary: false, primaryPort: opts.port }
-      }
-    }
-    throw new Error(`[taskboard] 无法为次要实例找到可用端口（${opts.port + 1}..${opts.port + PORT_SCAN_TRIES - 1}）`)
-  }
-
+  // 基准端口被异构服务占用：上移扫描。绑不上的忙端口先探测——
+  // 若是同项目主实例（可能它自己也曾上移）则降级代理到它，避免同项目双主 split-brain
   for (let p = opts.port + 1; p < opts.port + PORT_SCAN_TRIES; p++) {
     const h = tryBind(p, opts.localStore, true)
     if (h) {
       opts.log(`基准端口 ${opts.port} 被其他服务占用，主实例上移到 ${p}`)
       return { handle: h, store: opts.localStore, primary: true, primaryPort: p }
+    }
+    const hp = await probeHealth(p)
+    if (hp?.ok === true && hp.primary === true && hp.projectID === opts.projectID) {
+      opts.log(`端口 ${p} 发现同项目主实例（上移端口），降级为次要实例`)
+      return bindSecondary(p)
     }
   }
   throw new Error(`[taskboard] 无法找到可用端口（${opts.port}..${opts.port + PORT_SCAN_TRIES - 1}）`)
@@ -132,7 +144,6 @@ export default Plugin.define({
       webDir,
       projectID,
       localStore,
-      proxyStore: clientStore(`http://127.0.0.1:${port}`, token),
       log,
       logs: () => logs,
       hooks,
