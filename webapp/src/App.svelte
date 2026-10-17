@@ -6,15 +6,12 @@
   import { applySnapshot, beginOptimistic, emptyState, settle, visibleTasks, type BoardState } from "./lib/optimistic"
 import { STATUSES } from "./lib/board"
   import { notify } from "./lib/notify"
-  import { initDrag } from "./lib/drag.svelte"
   import { needsTicker } from "./lib/duration"
   import { startTicker, stopTicker } from "./lib/ticker.svelte"
   import { connectEvents } from "./lib/events"
   import Header from "./components/Header.svelte"
   import Board from "./components/Board.svelte"
   import TaskDetail from "./components/TaskDetail.svelte"
-  import Toasts from "./components/Toasts.svelte"
-  import ConfirmDialog from "./components/ConfirmDialog.svelte"
   import type { Status, Task } from "./lib/types"
 
   const MODE_LABEL: Record<ThemeMode, string> = {
@@ -133,7 +130,6 @@ import { STATUSES } from "./lib/board"
 
   onMount(() => {
     const unsub = themeMode.subscribe((m) => (mode = m))
-    const uninitDrag = initDrag(handleDrop)
     const disposeEvents = connectEvents({
       onSnapshot: (tasks, settings) => {
         board = applySnapshot(board, tasks, settings)
@@ -145,7 +141,6 @@ import { STATUSES } from "./lib/board"
     return () => {
       disposeEvents()
       unsub()
-      uninitDrag()
     }
   })
 
@@ -236,9 +231,6 @@ import { STATUSES } from "./lib/board"
     initialReject={detailInitialReject}
   />
 {/if}
-
-<Toasts />
-<ConfirmDialog />
 
 <style>
   .skeleton {
