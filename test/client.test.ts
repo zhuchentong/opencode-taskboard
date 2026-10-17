@@ -30,7 +30,7 @@ describe("clientStore（HTTP Store 实现）", () => {
       expect((await s.list()).map((x) => x.id)).toContain(t.id)
 
       await s.setSettings({ requireAnalysisConfirm: true })
-      expect(await s.getSettings()).toEqual({ requireAnalysisConfirm: true, autoDispatch: false })
+      expect(await s.getSettings()).toEqual({ requireAnalysisConfirm: true, autoDispatch: true })
 
       await s.release({ id: t.id, sessionID: "s1" }).catch(() => undefined)
       try {

@@ -77,7 +77,7 @@ export interface Task {
 
 export interface BoardSettings {
   requireAnalysisConfirm: boolean
-  /** 自动派发：待领取出现任务时自动驱动 worker 会话领取（默认关） */
+  /** 自动派发：待领取出现任务时自动驱动 worker 会话领取（默认开，已持久化的值尊重原设置） */
   autoDispatch: boolean
 }
 

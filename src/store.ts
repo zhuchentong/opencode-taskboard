@@ -127,7 +127,8 @@ export function createStore(
     const raw = (await backend.get(SETTINGS_KEY)) as Partial<BoardSettings> | undefined
     return {
       requireAnalysisConfirm: raw?.requireAnalysisConfirm ?? opts.requireAnalysisConfirm,
-      autoDispatch: raw?.autoDispatch ?? false,
+      // 默认开启（产品决策：建任务即自动派发符合直觉，日上限/并发上限兜底；已持久化的值尊重原设置）
+      autoDispatch: raw?.autoDispatch ?? true,
     }
   }
 

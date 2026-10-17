@@ -108,7 +108,7 @@ describe("SSE 事件流", () => {
     expect(await reader.nextEvent()).toEqual({ type: "hello" })
     const init = assertSnapshot(await reader.nextEvent(), "连接快照")
     expect(init.tasks).toEqual([])
-    expect(init.settings).toEqual({ requireAnalysisConfirm: false, autoDispatch: false })
+    expect(init.settings).toEqual({ requireAnalysisConfirm: false, autoDispatch: true })
 
     const created = await fetch(`${base}/api/tasks`, {
       method: "POST",
@@ -125,7 +125,7 @@ describe("SSE 事件流", () => {
       body: JSON.stringify({ requireAnalysisConfirm: true }),
     })
     const afterPut = assertSnapshot(await reader.nextEvent(), "更新设置后")
-    expect(afterPut.settings).toEqual({ requireAnalysisConfirm: true, autoDispatch: false })
+    expect(afterPut.settings).toEqual({ requireAnalysisConfirm: true, autoDispatch: true })
 
     ctrl.abort()
   })

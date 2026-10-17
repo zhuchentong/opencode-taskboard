@@ -116,7 +116,7 @@ describe("派发延迟修订：按任务冷却与即时填槽", () => {
     minIntervalMs: 0,
     evaluateTickMs: 0,
   }
-  /** 建派发器并开启自动派发（store 里 autoDispatch 默认关） */
+  /** 建派发器并开启自动派发（显式声明,不依赖默认值) */
   async function armed(opts = {}) {
     const h = harness({ ...FAST, ...opts })
     await h.store.setSettings({ autoDispatch: true })
@@ -228,6 +228,7 @@ describe("派发延迟修订：按任务冷却与即时填槽", () => {
 describe("initDispatcher 接线", () => {
   test("开关关闭时写事件不派发", async () => {
     const h = harness()
+    await h.store.setSettings({ autoDispatch: false }) // 显式关闭:默认已改为开启,此测试钉「关」的语义
     await toPending(h.store, "t1")
     h.fire()
     await sleep(40)
