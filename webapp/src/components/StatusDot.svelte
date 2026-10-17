@@ -1,34 +1,17 @@
 <script lang="ts">
-  import type { ConnState } from "../lib/api"
+  import type { ConnState } from "$lib/api"
 
   let { state }: { state: ConnState } = $props()
 
-  const META: Record<ConnState, { color: string; label: string }> = {
-    live: { color: "var(--ok)", label: "实时已连接" },
-    reconnecting: { color: "var(--warn)", label: "实时连接中断，重连中" },
-    polling: { color: "var(--accent)", label: "轮询模式" },
-  }
-
-  const meta = $derived(META[state])
+  // 连接状态 → 圆点色与中文文案；live 绿 / reconnecting 黄 / polling 红
+  const VIEW = {
+    live: { dot: "bg-success", text: "实时" },
+    reconnecting: { dot: "bg-warning", text: "重连中" },
+    polling: { dot: "bg-destructive", text: "轮询中" },
+  } as const
+  const view = $derived(VIEW[state])
 </script>
 
-<span class="status-dot" title={meta.label}>
-  <span class="dot" style:background={meta.color}></span>
-  <span class="label">{meta.label}</span>
+<span class="inline-flex items-center gap-1.5 text-xs text-muted-foreground" title={`看板连接状态：${view.text}`}>
+  <span class="size-2 rounded-full {view.dot}"></span>{view.text}
 </span>
-
-<style>
-  .status-dot {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--muted);
-    font-size: 12px;
-  }
-  .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    display: inline-block;
-  }
-</style>

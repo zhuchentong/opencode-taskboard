@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { STATUS_LABELS, timeAgo } from "../lib/board"
-  import { cardDrag, drag } from "../lib/drag.svelte"
-  import { formatClock, formatDuration, formatPhaseLine, formatPhaseTooltip, queueWaitMs } from "../lib/duration"
-  import { ticker } from "../lib/ticker.svelte"
-  import { formatTokens, totalTokens } from "../lib/usage"
-  import type { Task } from "../lib/types"
+  import { SHADOW_ITEM_MARKER_PROPERTY_NAME } from "svelte-dnd-action"
+  import { Badge } from "$lib/components/ui/badge"
+  import { Button } from "$lib/components/ui/button"
+  import { STATUS_LABELS, timeAgo } from "$lib/board"
+  import { formatClock, formatDuration, formatPhaseLine, formatPhaseTooltip, queueWaitMs } from "$lib/duration"
+  import { ticker } from "$lib/ticker.svelte"
+  import { formatTokens, totalTokens } from "$lib/usage"
+  import type { Task } from "$lib/types"
 
   let {
     task,
@@ -34,16 +36,34 @@
         : `🤖 ${task.claim.agent} · ${task.claim.sessionID.slice(0, 8)}`
       : "",
   )
-  // Agent 认领中的分析/执行任务禁止用户拖拽（防误抢）
+  // Agent 认领中的分析/执行任务禁止用户拖拽/键盘移动（防误抢；强制在 Lane 层 finalize 校验）
   const draggable = $derived(
     !(task.claim && task.claim.agent !== "human" && (task.status === "analyzing" || task.status === "executing")),
   )
-  const isDragging = $derived(drag.draggingId === task.id)
+  // svelte-dnd-action 拖拽预览时塞入的占位影子项流经本组件：只渲染占位样式，按钮禁点
+  const isShadow = $derived((task as Record<symbol, unknown>)[SHADOW_ITEM_MARKER_PROPERTY_NAME] === true)
   const inflight = $derived(pendingIds?.has(task.id) ?? false)
   const failFlash = $derived(flashIds?.has(task.id) ?? false)
   const canConfirm = $derived(
     (task.status === "analysis_confirm" || task.status === "completion_confirm") && (onconfirm || onquickreject),
   )
+  // 状态令牌映射：左缘色带与状态签圆点同源（analyzing/executing 蓝、确认列琥珀、done 灰）
+  const DOT_BY_STATUS: Record<string, string> = {
+    analyzing: "bg-primary",
+    executing: "bg-primary",
+    analysis_confirm: "bg-warning",
+    completion_confirm: "bg-warning",
+    done: "bg-muted-foreground/60",
+  }
+  const BAND_BY_STATUS: Record<string, string> = {
+    analyzing: "border-l-primary",
+    executing: "border-l-primary",
+    analysis_confirm: "border-l-warning",
+    completion_confirm: "border-l-warning",
+    done: "border-l-muted-foreground/40",
+  }
+  const dot = $derived(DOT_BY_STATUS[task.status] ?? "bg-muted-foreground/60")
+  const band = $derived(BAND_BY_STATUS[task.status] ?? "border-l-transparent")
   // 两段计时：进行中的段随 ticker 逐秒递增；绝对时间走悬浮提示
   const phaseLine = $derived(formatPhaseLine(task, ticker.now))
   const phaseTitle = $derived(formatPhaseTooltip(task, ticker.now))
@@ -62,17 +82,12 @@
 </script>
 
 <article
-  class="card"
-  class:dragging-source={isDragging}
-  class:inflight
-  class:fail-flash={failFlash}
+  class="group/card w-60 rounded-lg border border-l-4 bg-card p-3 text-card-foreground grid gap-1.5 text-sm cursor-pointer content-start {band} {task.status === 'done' ? 'opacity-80' : ''} {inflight ? 'opacity-60 animate-pulse' : ''} {isShadow ? 'opacity-50' : ''} {failFlash ? 'fail-flash' : ''} hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring outline-none {draggable ? '' : 'cursor-not-allowed'}"
   data-status={task.status}
   tabindex="0"
   role="button"
   aria-label={`查看任务：${task.title}`}
-  data-draggable={draggable ? "yes" : "no"}
-  title={[phaseTitle, queueTitle].filter(Boolean).join("\n") || undefined}
-  use:cardDrag={task.id}
+  title={[phaseTitle, queueTitle, draggable ? "" : "正由 Agent 处理，不能移动"].filter(Boolean).join("\n") || undefined}
   onclick={() => onopen(task)}
   onkeydown={(e) => {
     if (e.key === "Enter") onopen(task)
@@ -82,154 +97,62 @@
     }
   }}
 >
-  <div class="badge">
-    <span class="badge-dot"></span>{STATUS_LABELS[task.status]}
-  </div>
-  <div class="title">{task.title}</div>
+  <Badge variant="outline" class="self-start gap-1.5 font-normal text-muted-foreground">
+    <span class="size-1.5 rounded-full {dot}"></span>{STATUS_LABELS[task.status]}
+  </Badge>
+  <div class="font-semibold wrap-anywhere">{task.title}</div>
   {#if task.description}
-    <div class="desc">{task.description}</div>
+    <div class="text-muted-foreground line-clamp-2 wrap-anywhere">{task.description}</div>
   {/if}
   {#if task.analysis}
-    <div class="desc note">📌 {task.analysis}</div>
+    <div class="text-muted-foreground line-clamp-2 wrap-anywhere">📌 {task.analysis}</div>
   {/if}
   {#if task.result}
-    <div class="desc note">✅ {task.result}</div>
+    <div class="text-muted-foreground line-clamp-2 wrap-anywhere">✅ {task.result}</div>
   {/if}
-  <div class="meta">
-    {#if phaseLine}<span class="dur">{phaseLine}</span>{/if}
-    {#if queueLine}<span class="dur queue">{queueLine}</span>{/if}
-    {#if usageLine}<span class="dur">{usageLine}</span>{/if}
+  <div class="flex flex-wrap gap-2 text-xs text-muted-foreground">
+    {#if phaseLine}<span class="tabular-nums">{phaseLine}</span>{/if}
+    {#if queueLine}<span class="tabular-nums text-warning">{queueLine}</span>{/if}
+    {#if usageLine}<span class="tabular-nums">{usageLine}</span>{/if}
     <span>{timeAgo(task.updatedAt)}</span>
     {#if claimText}<span>{claimText}</span>{/if}
     {#if task.comments.length > 0}<span>💬 {task.comments.length}</span>{/if}
   </div>
-  {#if canConfirm}
-    <div class="quick" role="toolbar" aria-label="快速操作">
-      <button
-        class="quick-ok"
+  {#if canConfirm && !isShadow}
+    <div
+      class="hidden group-hover/card:flex group-focus-within/card:flex gap-1.5"
+      role="toolbar"
+      aria-label="快速操作"
+    >
+      <Button
+        size="xs"
         onclick={(e) => {
           e.stopPropagation()
           onconfirm?.(task)
-        }}>通过</button>
-      <button
-        class="quick-reject"
+        }}>通过</Button>
+      <Button
+        size="xs"
+        variant="destructive"
         onclick={(e) => {
           e.stopPropagation()
           onquickreject?.(task)
-        }}>打回</button>
+        }}>打回</Button>
     </div>
   {/if}
 </article>
 
 <style>
-  .card {
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 10px;
-    cursor: pointer;
-    display: grid;
-    gap: 6px;
-    font-size: 13px;
-    width: 240px;
-    align-content: start;
-  }
-  .card:hover,
-  .card:focus-visible {
-    background: var(--card-hover);
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
-  }
-  /* 状态色签：圆点颜色由 app.css 的 .card[data-status] .badge-dot 规则按状态注入 */
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    align-self: start;
-    border: 1px solid var(--line);
-    border-radius: 999px;
-    padding: 1px 8px 1px 6px;
-    font-size: 11px;
-    line-height: 1.6;
-    color: var(--muted);
-    background: var(--col);
-  }
-  .badge-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--muted);
-    display: inline-block;
-  }
-  .title {
-    font-weight: 600;
-    overflow-wrap: anywhere;
-  }
-  .desc {
-    color: var(--muted);
-    overflow-wrap: anywhere;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
-  .meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    color: var(--muted);
-    font-size: 12px;
-  }
-  /* 逐秒递增时不因数字宽度变化抖动 */
-  .dur {
-    font-variant-numeric: tabular-nums;
-  }
-  /* 排队中等「在等」而非「在跑」，用警示色与计时/消耗区分 */
-  .queue {
-    color: var(--warn);
-  }
-  .card.inflight {
-    opacity: 0.6;
-    animation: inflight-shimmer 1s infinite;
-  }
-  @keyframes inflight-shimmer {
-    50% {
-      border-color: var(--accent);
-    }
-  }
-  .card.fail-flash {
+  /* 失败红闪：乐观写失败的一拍提示（动画结束自动消失，类由 App 在 650ms 后摘除） */
+  .fail-flash {
     animation: fail-flash 0.6s ease-out;
   }
   @keyframes fail-flash {
     0%,
     45% {
-      box-shadow: 0 0 0 3px var(--danger);
+      box-shadow: 0 0 0 3px var(--destructive);
     }
     100% {
       box-shadow: none;
     }
-  }
-  .quick {
-    display: none;
-    gap: 6px;
-  }
-  .card:hover .quick,
-  .card:focus-within .quick {
-    display: flex;
-  }
-  .quick button {
-    border: none;
-    border-radius: 6px;
-    padding: 3px 10px;
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .quick-ok {
-    background: var(--ok);
-    color: #fff;
-  }
-  .quick-reject {
-    background: var(--danger);
-    color: #fff;
   }
 </style>
