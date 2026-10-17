@@ -56,8 +56,8 @@ export function createServer(
     primary: boolean
     projectID: string
     logs?: () => readonly string[]
-    /** 每次写广播快照后异步触发（自动派发器等观察者）；不影响响应 */
-    onWrite?: () => void
+    /** 每次写广播快照后异步触发（自动派发器等观察者）；携带快照任务列表（沿驱动实时消费），不影响响应 */
+    onWrite?: (tasks: Task[]) => void
   },
 ): ServerHandle {
   const { token, webDir } = opts
@@ -107,8 +107,9 @@ export function createServer(
   }
 
   async function emitSnapshot(): Promise<void> {
-    emit({ type: "snapshot", tasks: await store.list(), settings: await store.getSettings() })
-    if (opts.onWrite) setTimeout(opts.onWrite, 0)
+    const tasks = await store.list()
+    emit({ type: "snapshot", tasks, settings: await store.getSettings() })
+    if (opts.onWrite) setTimeout(() => opts.onWrite(tasks), 0)
   }
 
   function handleEvents(req: Request): Response {

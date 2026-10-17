@@ -1,4 +1,5 @@
 export { initDispatcher } from "./engine"
+export { buildDispatchPrompt } from "./prompt"
 export type { DispatcherSession, DispatcherStatus, DispatcherStorage } from "./types"
 export * from "./policy"
 export type {

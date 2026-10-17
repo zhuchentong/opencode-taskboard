@@ -5,6 +5,7 @@ import { registerTools } from "./tools"
 import { registerCommands } from "./commands"
 import { clientStore } from "./client"
 import { initDispatcher, DISPATCH_CAPS } from "./dispatcher"
+import type { Task } from "./types"
 
 const BASE_PORT_DEFAULT = 4370
 const MAX_LOGS = 500
@@ -50,7 +51,7 @@ export async function arbitrate(opts: {
   localStore: Store
   log: (m: string) => void
   logs: () => readonly string[]
-  hooks: { onWrite?: () => void }
+  hooks: { onWrite?: (tasks: Task[]) => void }
 }): Promise<{ handle: ServerHandle; store: Store; primary: boolean; primaryPort: number }> {
   const tryBind = (p: number, store: Store, primary: boolean): ServerHandle | undefined => {
     try {
@@ -61,7 +62,7 @@ export async function arbitrate(opts: {
         primary,
         projectID: opts.projectID,
         logs: opts.logs,
-        onWrite: () => opts.hooks.onWrite?.(),
+        onWrite: (tasks) => opts.hooks.onWrite?.(tasks),
       })
     } catch {
       return undefined
@@ -137,7 +138,7 @@ export default Plugin.define({
 
     const webDir = new URL("./web/", import.meta.url).pathname
 
-    const hooks: { onWrite?: () => void } = {}
+    const hooks: { onWrite?: (tasks: Task[]) => void } = {}
     const arb = await arbitrate({
       port,
       token,
