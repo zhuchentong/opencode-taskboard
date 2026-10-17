@@ -3,7 +3,7 @@
  * 模块间不横向 import 实现,只依赖本文件 —— 依赖方向见模块头注。
  */
 
-import type { Status, Task, TaskUsage } from "../types"
+import type { Status, Task } from "../types"
 
 /* ============ 转移沿 ============ */
 
@@ -21,21 +21,8 @@ export interface TaskTransition {
 
 /* ============ 分段计时 ============ */
 
-/**
- * 分段计时记录:只追加账本(回 pending 不作废历史段)。
- * 由 store 写路径的 transitionSpans 维护(一期零新 Store 方法);
- * `usage` 为封口时刻从 task.usage 拷贝的累计快照,段间消耗由展示层做差(二期)。
- */
-export interface SpanRecord {
-  phase: "analyzing" | "executing" | "analysis_confirm"
-  /** 第几轮(进 pending 次数,首轮为 1;打回重做递增,问答往复不计入) */
-  round: number
-  /** 归因到会话;人工操作段(human claim)缺省 */
-  sessionID?: string
-  startedAt: number
-  endedAt?: number
-  usage?: TaskUsage
-}
+// SpanRecord 的真源在 src/types.ts(Task.spanLog 字段需要它,避免 store→dispatcher 反向依赖)
+export type { SpanRecord } from "../types"
 
 /* ============ 状态机 ============ */
 

@@ -25,6 +25,22 @@ export interface PhaseSpan {
   endedAt?: number
 }
 
+/**
+ * 分段计时记录（只追加账本，回 pending 不作废历史段）：
+ * 问答循环/打回重做的每一段时长都独立留存，由 transitionSpans 双写维护。
+ * usage 为封口时刻从 task.usage 拷贝的累计快照，段间消耗由展示层做差（二期）。
+ */
+export interface SpanRecord {
+  phase: "analyzing" | "executing" | "analysis_confirm"
+  /** 第几轮（进 pending 次数，首轮为 1；打回重做递增，问答往复不计入） */
+  round: number
+  /** 归因到会话；人工操作段（human claim）缺省 */
+  sessionID?: string
+  startedAt: number
+  endedAt?: number
+  usage?: TaskUsage
+}
+
 /** 任务累计的 token 消耗快照（由派发器在会话结束时回写；缺字段按 0 计） */
 export interface TaskUsage {
   input: number
@@ -51,6 +67,10 @@ export interface Task {
   usage?: TaskUsage
   /** 分析段/执行段各自的时间区间；无字段表示尚未记录（旧任务或尚未开工） */
   spans?: Partial<Record<"analyzing" | "executing", PhaseSpan>>
+  /** 分段计时账本（只追加；问答循环/打回重做的每段独立留存） */
+  spanLog?: SpanRecord[]
+  /** 轮次 = 进 pending 的次数（首轮 1；打回重做递增，问答往复不计入）；由 transitionSpans 维护 */
+  round?: number
   createdAt: number
   updatedAt: number
 }
