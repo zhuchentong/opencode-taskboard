@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "bun run src/dev.ts",
     "test": "bun test",
+    "postinstall": "cd webapp && bun install",
     "build:web": "cd webapp && bun x vite build",
     "dev:web": "cd webapp && bun x vite",
     "watch:web": "cd webapp && bun x vite build --watch"

@@ -1,4 +1,4 @@
-import { StoreError, type StoreErrorErrorCode, type Task, type TaskPatch } from "./types"
+import { StoreError, type StoreErrorCode, type Task, type TaskPatch } from "./types"
 import type { Store } from "./store"
 
 /**
@@ -22,7 +22,7 @@ export function clientStore(base: string, token: string): Store {
     if (!res.ok) {
       const err = (body as { error?: { code?: string; message?: string } } | undefined)?.error
       throw new StoreError(
-        (err?.code as StoreErrorErrorCode) ?? "conflict",
+        (err?.code as StoreErrorCode) ?? "conflict",
         err?.message ?? `看板服务返回 ${res.status}`,
       )
     }

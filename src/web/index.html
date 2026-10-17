@@ -5,7 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>任务看板</title>
     <script>
-      window.__TASKBOARD_TOKEN__ = "__TASKBOARD_TOKEN_VALUE__";
+      // token 由服务端把占位符替换为真实值后注入；占位符未被替换（vite dev 场景）时
+      // 回落 "dev"——匹配 bun run dev 的固定令牌。生产路径必然替换，兜底分支不可达。
+      var token = "__TASKBOARD_TOKEN_VALUE__";
+      window.__TASKBOARD_TOKEN__ = token.startsWith("__") ? "dev" : token;
     </script>
     <script type="module" crossorigin src="/assets/board.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/board.css">

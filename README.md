@@ -25,12 +25,13 @@ export default plugin
 ## 开发
 
 ```bash
-bun install              # 根依赖
-bun test                 # 全量测试（82 例：服务端 + 前端纯函数）
-bun run dev              # Mock 模式跑看板（内存后端，免 OpenCode）
-cd webapp && bun install # 前端构建链（svelte/vite，仅开发需要）
-bun run dev:web          # 前端 HMR（/api 代理到 4370）
+bun install              # 根依赖（postinstall 会自动装 webapp 依赖）
+bun test                 # 全量测试：服务端 + 前端纯函数
+bun run dev              # Mock 模式跑看板（内存后端，免 OpenCode，token=dev）
+cd webapp && bun install # 单独重装前端依赖（正常由根 bun install 自动完成）
+bun run dev:web          # 前端 HMR（/api 代理到 4370，token 兜底 dev，配合 bun run dev 使用）
 bun run build:web        # 重建前端产物到 src/web/（需提交）
+bun run watch:web        # 产物 watch 构建
 ```
 
 文档：设计规格与验收记录见 `docs/superpowers/`。

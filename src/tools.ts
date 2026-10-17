@@ -1,6 +1,4 @@
 import type { StoreError, Task } from "./types"
-
-import type { StoreError, Task } from "./types"
 import type { Store } from "./store"
 
 /** OpenCode 插件上下文中与工具注册相关的最小结构（避免耦合完整类型） */

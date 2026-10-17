@@ -1,54 +1,52 @@
 # AGENTS.md
 
-面向 OpenCode 会话的仓库指南。权威口径看设计规格 `docs/superpowers/specs/2026-10-16-taskboard-plugin-design.md`（§5 状态机、§9 实例模型、§11 开发工作流）；实施计划与验收记录在 `docs/superpowers/plans/`。
+面向 OpenCode 会话的仓库指南。权威口径看设计规格 `docs/superpowers/specs/2026-10-16-taskboard-plugin-design.md`（§5 状态机、§9 并发与实例模型、§11 开发工作流），实施计划与验收记录在 `docs/superpowers/plans/`。
 
 ## 项目是什么
 
-OpenCode V2 插件：一个七阶段任务看板（planning → pending → analyzing → analysis_confirm → executing → completion_confirm → done）。Agent 用 `taskboard_*` 工具领取、分析、提交完成，用户在网页看板（`http://127.0.0.1:4370`）上规划、放行、验收。
+OpenCode V2 插件：七阶段任务看板（planning → pending → analyzing → analysis_confirm → executing → completion_confirm → done）。Agent 用 `taskboard_*` 工具领取、分析、提交完成，用户在网页看板（基准端口 4370）上规划、放行、验收。
 
-- `src/` —— 插件运行时（TypeScript，Bun 跑；唯一依赖 `@opencode/plugin@2.0.30`，与本机 opencode 版本钉死）
-- `webapp/` —— 前端源码（Svelte 5 + Vite，仅开发需要）
+- `src/` —— 插件运行时（TypeScript，Bun 跑；唯一依赖 `@opencode/plugin`，与 `package.json` 钉死的 opencode 版本一致）。入口 `index.ts`（端口仲裁 + 装配）；`store.ts` 本地存储、`client.ts` HTTP 代理实现、`server.ts` HTTP 服务 + SSE、`tools.ts` Agent 工具、`commands.ts` `/taskboard` 与 `/taskboard-claim` 命令、`dispatcher.ts` 自动派发器、`spans.ts` 阶段计时、`dev.ts` Mock 模式
+- `webapp/` —— 前端源码（Svelte 5 + Vite，仅开发前端时需要）
 - `src/web/` —— **前端构建产物，已提交入库**（见下方「产物必须入库」）
-- `test/`（服务端）、`webapp/test/`（前端纯函数）
+- `test/`（服务端）、`webapp/test/`（前端纯函数）—— 全部进 `bun test`
 
 ## 命令
 
 ```bash
 bun install                        # 根依赖（只有 @opencode/plugin）
-bun test                           # 唯一验收门：同时跑 test/ 与 webapp/test/（15 文件）
+cd webapp && bun install           # 单独重装前端依赖（正常由根 bun install 的 postinstall 自动完成）
+bun test                           # 唯一验收门（webapp 依赖由根 postinstall 自动装；报 Cannot find package 'markdown-it' 时先 cd webapp && bun install）
 bun test test/store.test.ts        # 单文件；bun test -t "关键字" 按用例名过滤
-bun run dev                        # Mock 模式：内存后端 + 真实服务，免 OpenCode；token 固定 dev
-cd webapp && bun install           # 前端构建链，仅开发前端时需要
-bun run dev:web                    # 前端 HMR，/api 代理到 4370
+bun run dev                        # Mock 模式：内存后端 + 真实服务，免 OpenCode；token 固定 dev，TASKBOARD_PORT 可换端口
+bun run dev:web                    # 前端 HMR（/api 代理到 4370，token 兜底 dev，配合 bun run dev 使用）
 bun run build:web                  # 重建产物到 src/web/（必须与 webapp/ 改动一起提交）
+bun run watch:web                  # 构建产物 watch 模式
 ```
 
-**没有 lint、没有格式化器、没有 CI、没有可用的 typecheck。** `package.json` 里没有 typecheck 脚本；`tsconfig.json` 要求 `bun-types` 但该包未安装，`tsc --noEmit` 会直接报 TS2688。仓库里还存在既有类型瑕疵（`src/client.ts` 导入了不存在的 `StoreErrorErrorCode`，`src/tools.ts` 首尾有重复的 type-only import），Bun 会擦除类型导入所以 `bun test` 仍绿。别声称 typecheck 通过，`bun test` 是唯一验证手段。
+**没有 lint、没有格式化器、没有 CI、没有可用的 typecheck。** `tsconfig.json` 要求 `bun-types` 但该包未安装，`tsc --noEmit` 直接报 TS2688。别声称 typecheck 通过，`bun test` 是唯一验证手段。
 
 ## 硬约束（改代码前必须知道）
 
-- **产物必须入库**：`src/web/` 是给用户安装用的（用户只拷 `src/`，不需要 Node 工具链）。改了 `webapp/` 就必须跑 `bun run build:web` 并提交产物，否则发布出去的是旧前端。`vite.config.ts` 把 `entryFileNames/chunkFileNames/assetFileNames` 钉死为 `assets/board.js` / `assets/board.[ext]`（无 hash），别「修」这个反直觉配置。
-- **Store 有两份实现**：`src/store.ts`（本地）与 `src/client.ts`（HTTP 代理到主实例）。新增 Store 方法必须三处同步改：接口定义、本地实现、`src/client.ts` 实现 + `src/server.ts` 路由。
-- **写者唯一**：只有绑到基准端口 4370 的实例是主实例，持有唯一写串行链（`store.ts` 里 `serialized()` 是**全局**互斥，比 spec §9 写的「每任务锁」更强）；端口被同项目主实例占用时降级为次要实例，把**包括 Agent 工具在内**的全部写操作代理过去。只读操作走本地也不走代理。破坏这点 = 出现并发写。
-- **自动派发器只装配在主实例**（`src/index.ts`），次要实例也装会导致双派发。
-- **每次写都要广播**：`src/server.ts` 新增写路由后必须 `await emitSnapshot()`，否则前端 SSE（`/api/events` 全量快照，唯一事实源）会停留在旧状态。
-- **storage key 必须前置 `projectID`**：`ctx.storage` 按插件 ID 全局共享、无位置隔离（spike #2 实证）。漏掉前缀会跨项目串数据。
-- **令牌靠占位符注入**：`webapp/index.html` 里 `__TASKBOARD_TOKEN_VALUE__` 由 `server.ts` 的 `serveStatic` 在响应时替换进 `window.__TASKBOARD_TOKEN__`。前端读 window 必须惰性（`api.ts` 注释有说明：bun 测试环境无 DOM）。
-- **前端交互逻辑写纯函数**：放在 `webapp/src/lib/`（`board.ts` 分组、`lane.ts` 拖拽计算、`markdown.ts`、`events.ts` SSE 客户端、`optimistic.ts` 乐观更新状态机）并配套 `webapp/test/`，不要塞进 `.svelte` 组件里。
-- **Agent 不能标记完成**：`taskboard_complete` 只到 completion_confirm，只有用户在网页确认才进 done；打回必须附评论。别「简化」掉这些产品不变量。
-- **工具生效名是 `taskboard_<短名>`**（来自 `taskboard` 命名空间，spike #3 实证），所以提示词里同时提到 `tools.taskboard.*` 与原生 `taskboard_*`。
+- **产物必须入库**：`src/web/` 是给用户安装用的（用户只拷 `src/`，无需 Node 工具链）。改了 `webapp/` 就必须跑 `bun run build:web` 并提交产物。`webapp/vite.config.ts` 把产物文件名钉死为 `assets/board.js` / `assets/board.[ext]`（无 hash、`emptyOutDir`），别「修」这个反直觉配置。`server.proxy` 把 `/api` 代理到 4370、`webapp/index.html` 的 token 占位符带 dev 兜底（未被服务端替换时回落 `"dev"`），dev:web HMR 因此可直接用。
+- **Store 有两份实现**：`src/store.ts`（本地）与 `src/client.ts`（HTTP 代理）。新增 Store 方法要四处同步：接口类型、`store.ts` 本地实现、`client.ts` 代理实现、`server.ts` 路由（写路由必须 `await emitSnapshot()`，见下）。
+- **写者唯一 + 三向端口仲裁**（`src/index.ts` `arbitrate`）：绑上基准端口 4370 → 主实例（唯一写者，写全走 `store.ts` 的 `serialized()` 全局互斥链，比 spec §9 的「每任务锁」更强）；基准端口被**同项目**主实例占用（`/api/health` 的 projectID 相同）→ 降级次要实例，整个 Store 读写全量代理到主实例；被**其他服务/其他项目**占用 → 端口上移自己当主实例。破坏写者唯一 = 并发写坏数据。
+- **自动派发器只装配在主实例**（`src/index.ts` 只在 `arb.primary` 时 `initDispatcher`），次要实例也装会双派发。派发器是 worker 池模型（`src/dispatcher.ts`）：**一任务一会话**（任务终结后会话不复用）、即时填槽、全局最小间隔节流 + 日派发上限；派发异常连败 → 全局 paused 熔断，单 worker 领取超时连败 → 只冷却该 worker。派发提示词把 taskID 写死（防多 worker 抢任务）；worker 会话必须显式传 `ctx.location.directory`，否则回退到服务进程 cwd（实测曾落到无关目录）。改派发器前先读 `dispatcher.ts` 头注与 `test/dispatcher-wiring.test.ts`、`docs/superpowers/plans/2026-10-16-auto-dispatcher.md`。
+- **每次写都要广播**：`src/server.ts` 的写路由必须 `await emitSnapshot()`，否则前端 SSE（`/api/events` 全量快照，唯一事实源）停在旧状态。例外要自知：派发器直接走 store 层不经 HTTP，`emitSnapshot` 不会触发，由 `index.ts` 注入的 `broadcast` 显式补发。
+- **storage key 必须前置 `projectID`**：`ctx.storage` 按插件全局共享、无位置隔离。本地 store 靠 `storageBackend(ctx.storage, `${projectID}/`)` 包装；派发器拿的是裸 storage，自己拼 `${projectID}/dispatcher/...`；token 持久化在 `${projectID}/settings/token`（跨重启与多实例共享同一令牌）。漏前缀会跨项目串数据。
+- **令牌靠占位符注入**：`webapp/index.html` 里 `__TASKBOARD_TOKEN_VALUE__` 由 `server.ts` 伺服静态文件时替换进 `window.__TASKBOARD_TOKEN__`。前端读 window 必须惰性（`webapp/src/lib/api.ts` 有说明：bun 测试环境无 DOM）。
+- **前端交互逻辑写纯函数**：放 `webapp/src/lib/`（`board.ts` 分组、`lane.ts` 拖拽、`duration.ts`/`usage.ts` 计时与消耗、`markdown.ts`、`events.ts` SSE、`optimistic.ts` 乐观更新等）并配套 `webapp/test/`；`.svelte.ts` 响应式模块（`drag`、`ticker`）也在 lib。别把逻辑塞进 `.svelte` 组件。
+- **Agent 不能标记完成**：`taskboard_complete` 只到 completion_confirm，只有用户在网页确认才进 done；打回必须附评论。工具共 7 个（list/get/claim/analyze/complete/release/update），生效名是 `taskboard_<短名>`（来自 `taskboard` 命名空间，提示词里 `tools.taskboard.*` 与原生 `taskboard_*` 都提）。别「简化」掉这些产品不变量。
 
 ## 本地集成调试
 
-`.debug/` 被 gitignore，内含 playground 与验收脚本（`accept-dispatch.sh` 等），只在本机存在。
-
 - 集成装载必须用 `.opencode/plugins/taskboard-loader.ts` 装载器文件（`import plugin from "<abs>/src/index.ts"`）：v2.0.30 的 `plugins` 配置键**不加载本地路径**（spike 实证，别浪费时间试配置）。
 - 改插件代码后要 `opencode service restart`——本地依赖不触发自动重载。
-- 插件日志统一 `[taskboard]` 前缀，只进内存环形缓冲，用 `GET /api/logs` 看；插件 console 不落 `opencode.log`，服务端问题再查 `~/.local/share/opencode/log/opencode.log`（筛 `role=server`）。
-- 自动派发器的单飞门 `awaitingClaim`、派发异常熔断、执行唤醒（nudge）几处逻辑都是拿真实会话 API 反复调出来的；改之前先读 `docs/superpowers/plans/2026-10-16-auto-dispatcher.md` 与 `.debug/accept-dispatch.sh`。
+- 插件日志统一 `[taskboard]` 前缀，进内存环形缓冲，`GET /api/logs` 查看；插件 console 不落 `opencode.log`，服务端问题查 `~/.local/share/opencode/log/opencode.log`（筛 `role=server`）。
+- `.debug/` 被 gitignore，属本机私有（playground 与验收脚本），没有它属正常；派发器行为以入库的 `test/dispatcher-wiring.test.ts` 为准。
 
 ## 约定
 
-- 注释、日志、UI 文案、文档、提交信息一律中文；提交用中文约定式提交带 emoji（见 `git log`），如 `fix: 🐛 派发单飞门——awaitingClaim 期间禁止重复派发防打断 worker`。
+- 注释、日志、UI 文案、文档、提交信息一律中文；提交用中文约定式提交带 emoji（见 `git log`），如 `feat: 🚀 派发器 worker 池重构——一任务一会话与即时填槽调度`。
 - 测试描述也用中文（如 `reject 无评论 → 400 comment_required`）。
 - `StoreError` 是跨层唯一错误契约：code → HTTP 状态映射在 `server.ts` 的 `STATUS_BY_CODE`，给 Agent 的文案在 `tools.ts` 的 `describeError`。新增错误码要同时补这两处。
