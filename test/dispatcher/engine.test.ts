@@ -383,6 +383,18 @@ describe("engine 装配(沿驱动 initDispatcher)", () => {
     h.d.dispose()
   }, 3000)
 
+  test("空看板：零任务 → empty 跳过,无派发,lastSkipReason=empty", async () => {
+    const h = harness({ claimWaitMs: 5_000 })
+    await h.store.setSettings({ autoDispatch: true })
+    await h.fire()
+    await sleep(40)
+    expect(h.session.prompts).toHaveLength(0) // 没有任务,不派发
+    expect(h.lines.some((l) => l.includes("派发跳过：empty"))).toBe(true)
+    expect(h.d.status().lastSkipReason).toBe("empty")
+    expect(h.d.status().state).toBe("idle") // 空闲,不是错误态
+    h.d.dispose()
+  })
+
   test("全部待领取任务在任务冷却中时不报 empty：pendingTotal>0 但 pending 为空，不崩溃且任务保持 pending", async () => {
     const h = harness({ claimWaitMs: 20, backoffBaseMs: 1000, minIntervalMs: 1 })
     await h.store.setSettings({ autoDispatch: true })
