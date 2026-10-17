@@ -1,12 +1,11 @@
+export { initDispatcher } from "./engine"
+export type { DispatcherSession, DispatcherStatus, DispatcherStorage } from "./types"
 export * from "./policy"
 export type {
   AdvanceRule,
   AlongState,
   CandidateSelector,
   DispatchContext,
-  DispatcherSession,
-  DispatcherStatus,
-  DispatcherStorage,
   DispatchState,
   GlobalPhase,
   Guard,

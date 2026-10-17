@@ -81,7 +81,7 @@ export function createSessionPool(deps: SessionPoolDeps) {
       try {
         await deps.patchTask(taskID, { status: "pending" })
         deps.onTimeout(taskID)
-        deps.log(`派发超时未见领取,任务已退回待领取 task=${taskID}`)
+        deps.log(`派发超时未见领取，任务已退回待领取 task=${taskID}`)
         await dropSession(sessionID, "超时未领取")
         return
       } catch (e) {

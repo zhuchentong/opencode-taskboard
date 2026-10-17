@@ -50,7 +50,15 @@ export function createTrigger(opts: {
         try {
           await opts.evaluate()
         } catch (e) {
-          opts.log(`派发评估失败:${e instanceof Error ? e.message : String(e)}`)
+          const at =
+            e instanceof Error
+              ? (e.stack ?? "")
+                  .split("\n")
+                  .slice(1, 3)
+                  .map((s) => s.trim())
+                  .join(" | ")
+              : ""
+          opts.log(`派发评估失败:${e instanceof Error ? e.message : String(e)} @ ${at}`)
         }
       }
       running = false

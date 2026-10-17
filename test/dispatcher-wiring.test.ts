@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { DISPATCH_CAPS, initDispatcher, type DispatcherSession } from "../src/dispatcher"
+import { DISPATCH_CAPS, initDispatcher, type DispatcherSession } from "../src/dispatcher/index"
 import { createStore, memoryBackend, type Store } from "../src/store"
 import type { Task } from "../src/types"
 
@@ -323,30 +323,44 @@ describe("initDispatcher 接线", () => {
     h.d.dispose()
   })
 
-  test("执行唤醒：analysis_confirm 停留后被放行 → 提示继续一次，不重复", async () => {
+  test("沿驱动执行唤醒：放行唤醒一次；同会话多次跳转后第二轮放行再唤醒（缺陷 3/4 回归钉子）", async () => {
     const h = harness({ claimWaitMs: 5_000 })
     await h.store.setSettings({ autoDispatch: true, requireAnalysisConfirm: true })
     const t = await toPending(h.store, "nudge-任务")
     await h.store.claim({ id: t.id, sessionID: "ses_w1", agent: "build" })
     await h.store.analyze({ id: t.id, sessionID: "ses_w1", analysis: "a" })
     expect((await h.store.get(t.id)).status).toBe("analysis_confirm")
-    // 第一次评估：观察到 analysis_confirm → 记入 confirmSeen
+    // 第一次评估：观察到 analysis_confirm → 记入 lastSeen（不唤醒）
     h.fire()
     await sleep(40)
     const promptsBefore = h.session.prompts.length
-    // 用户在网页点「通过」→ executing（claim 保留）
+    // 用户在网页点「通过」→ executing（claim 保留）→ 沿出现 → 唤醒
     await h.store.patch(t.id, { action: "confirm" })
     h.fire()
     await sleep(40)
-    // nudge 目标从 claim.sessionID 取，不依赖任何持久 worker 指针
     expect(h.session.prompts.length).toBe(promptsBefore + 1)
     expect(h.session.prompts.at(-1)!.sessionID).toBe("ses_w1")
     expect(h.session.prompts.at(-1)!.text).toContain("已放行")
+    // 重复写事件（同状态无新沿）不重复唤醒
     h.fire()
     await sleep(40)
-    expect(h.session.prompts.length).toBe(promptsBefore + 1) // 不重复
+    expect(h.session.prompts.length).toBe(promptsBefore + 1)
+    // 多次跳转（同会话问答循环）：拖拽回 analyzing（claim 保留）→ 重新分析 → 再放行 → 同会话再唤醒
+    await h.store.patch(t.id, { status: "analyzing" })
+    h.fire()
+    await sleep(40)
+    await h.store.analyze({ id: t.id, sessionID: "ses_w1", analysis: "a2" }) // → analysis_confirm
+    h.fire()
+    await sleep(40)
+    await h.store.patch(t.id, { action: "confirm" }) // 第二轮放行 → executing 沿（新 seq）→ 必须再唤醒
+    h.fire()
+    await sleep(40)
+    const last = h.session.prompts.at(-1)!
+    expect(last.sessionID).toBe("ses_w1")
+    expect(last.text).toContain("已放行")
+    expect(h.session.prompts.length).toBe(promptsBefore + 2)
     h.d.dispose()
-  })
+  }, 4000)
 
   test("confirm-off（默认流程）：worker 自查自执行不经停确认 → 不打断", async () => {
     const h = harness({ claimWaitMs: 5_000 })
