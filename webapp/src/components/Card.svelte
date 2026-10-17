@@ -5,7 +5,6 @@
   import { STATUS_LABELS, timeAgo } from "$lib/board"
   import { formatClock, formatDuration, formatPhaseLine, formatPhaseTooltip, queueWaitMs } from "$lib/duration"
   import { ticker } from "$lib/ticker.svelte"
-  import { formatTokens, totalTokens } from "$lib/usage"
   import type { Task } from "$lib/types"
 
   let {
@@ -29,13 +28,6 @@
     onmove?: (task: Task, dir: -1 | 1) => void
   } = $props()
 
-  const claimText = $derived(
-    task.claim
-      ? task.claim.agent === "human"
-        ? "👤 用户执行中"
-        : `🤖 ${task.claim.agent} · ${task.claim.sessionID.slice(0, 8)}`
-      : "",
-  )
   // Agent 认领中的分析/执行任务禁止用户拖拽/键盘移动（防误抢）
   const draggable = $derived(
     !(task.claim && task.claim.agent !== "human" && (task.status === "analyzing" || task.status === "executing")),
@@ -66,8 +58,6 @@
   // 两段计时：进行中的段随 ticker 逐秒递增；绝对时间走悬浮提示
   const phaseLine = $derived(formatPhaseLine(task, ticker.now))
   const phaseTitle = $derived(formatPhaseTooltip(task, ticker.now))
-  // 消耗总量（无快照则不显示该行）；随 task prop 变化，无需额外状态
-  const usageLine = $derived(task.usage ? `📊 ${formatTokens(totalTokens(task.usage))}` : "")
   // 排队时长：仅「待领取」显示，让「在排队」与「派发出故障」一眼可辨
   const queueLine = $derived.by(() => {
     const ms = queueWaitMs(task, ticker.now)
@@ -103,23 +93,16 @@
   <Badge variant="outline" class="self-start gap-1.5 font-normal text-muted-foreground">
     <span class="size-1.5 rounded-full {dot}"></span>{STATUS_LABELS[task.status]}
   </Badge>
-  <div class="font-semibold wrap-anywhere">{task.title}</div>
-  {#if task.description}
-    <div class="text-muted-foreground line-clamp-2 wrap-anywhere">{task.description}</div>
-  {/if}
-  {#if task.analysis}
-    <div class="text-muted-foreground line-clamp-2 wrap-anywhere">📌 {task.analysis}</div>
-  {/if}
-  {#if task.result}
-    <div class="text-muted-foreground line-clamp-2 wrap-anywhere">✅ {task.result}</div>
-  {/if}
-  <div class="flex flex-wrap gap-2 text-xs text-muted-foreground">
-    {#if phaseLine}<span class="tabular-nums">{phaseLine}</span>{/if}
-    {#if queueLine}<span class="tabular-nums text-warning">{queueLine}</span>{/if}
-    {#if usageLine}<span class="tabular-nums">{usageLine}</span>{/if}
-    <span>{timeAgo(task.updatedAt)}</span>
-    {#if claimText}<span>{claimText}</span>{/if}
-    {#if task.comments.length > 0}<span>💬 {task.comments.length}</span>{/if}
+  <!-- 固定尺寸：标题钳两行，不足两行也占位 -->
+  <div class="line-clamp-2 min-h-10 font-semibold wrap-anywhere">{task.title}</div>
+  <!-- 固定尺寸：仅时间类元信息，单行截断；悬浮提示含绝对时刻 -->
+  <div
+    class="flex h-5 items-center gap-2 overflow-hidden text-xs whitespace-nowrap text-muted-foreground"
+    title={[phaseTitle, queueTitle].filter(Boolean).join("\n") || undefined}
+  >
+    {#if phaseLine}<span class="tabular-nums flex-none">{phaseLine}</span>{/if}
+    {#if queueLine}<span class="tabular-nums flex-none text-warning">{queueLine}</span>{/if}
+    <span class="truncate">{timeAgo(task.updatedAt)}</span>
   </div>
   {#if canConfirm}
     <div
