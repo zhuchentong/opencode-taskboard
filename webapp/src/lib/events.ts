@@ -22,12 +22,14 @@ export interface EventsDeps {
   fetchBoard(): Promise<{ tasks: Task[]; settings: BoardSettings }>
 }
 
+// 宿主方法（setInterval 等）要求 this 为 globalThis：作为 deps 对象的属性被调用时
+// 接收者变成 deps，会抛 Illegal invocation——必须显式绑定
 const realDeps: EventsDeps = {
   EventSource: globalThis.EventSource as never,
-  setInterval,
-  clearInterval,
-  setTimeout,
-  clearTimeout,
+  setInterval: setInterval.bind(globalThis),
+  clearInterval: clearInterval.bind(globalThis),
+  setTimeout: setTimeout.bind(globalThis),
+  clearTimeout: clearTimeout.bind(globalThis),
   fetchBoard,
 }
 
