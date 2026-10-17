@@ -193,7 +193,8 @@
   }
 </script>
 
-<div class="flex h-dvh flex-col overflow-hidden">
+<!-- 根容器不锁视口高度：内容超长时由 html 文档原生滚动条承担竖直滚动 -->
+<div class="flex min-h-dvh flex-col">
   <Header
     settings={board.settings}
     {conn}
@@ -216,13 +217,13 @@
       onmove={moveTask}
     />
   {:else}
-    <main class="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-2.5 overflow-hidden p-4" aria-label="加载中">
+    <main class="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-2.5 p-4" aria-label="加载中">
       {#each Array(7) as _, i (i)}
-        <div class="flex flex-1 items-center gap-2.5 rounded-lg border p-3">
-          <Skeleton class="h-3.5 w-22" />
-          <div class="flex flex-1 flex-wrap gap-2.5">
-            <Skeleton class="h-24 w-60" />
-            <Skeleton class="h-24 w-60" />
+        <div class="flex h-40 flex-none overflow-hidden rounded-lg border">
+          <Skeleton class="w-9 rounded-none" />
+          <div class="flex min-w-0 flex-1 flex-nowrap items-stretch gap-2.5 overflow-hidden p-3">
+            <Skeleton class="h-full w-60 flex-none" />
+            <Skeleton class="h-full w-60 flex-none" />
           </div>
         </div>
       {/each}

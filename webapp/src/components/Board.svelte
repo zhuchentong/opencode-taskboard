@@ -24,7 +24,7 @@
   const groups = $derived(groupByStatus(tasks))
 </script>
 
-<main class="mx-auto flex w-full max-w-7xl min-h-0 flex-1 flex-col gap-2.5 overflow-hidden p-4">
+<main class="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-2.5 p-4">
   {#each STATUSES as status (status)}
     <Lane
       status={status}

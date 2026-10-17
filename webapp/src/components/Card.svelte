@@ -72,7 +72,7 @@
 
 <article
   data-task-id={task.id}
-  class="group/card w-60 rounded-lg border border-l-4 bg-card p-3 text-card-foreground grid gap-1.5 text-sm cursor-pointer content-start {band} {task.status === 'done' ? 'opacity-80' : ''} {inflight ? 'opacity-60 animate-pulse' : ''} {failFlash ? 'fail-flash' : ''} hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring outline-none {draggable ? '' : 'cursor-not-allowed'}"
+  class="group/card relative w-60 flex-none rounded-lg border border-l-4 bg-card p-3 text-card-foreground grid gap-1.5 text-sm cursor-pointer content-start {band} {task.status === 'done' ? 'opacity-80' : ''} {inflight ? 'opacity-60 animate-pulse' : ''} {failFlash ? 'fail-flash' : ''} hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring outline-none {draggable ? '' : 'cursor-not-allowed'}"
   class:dragging-source={isDragging}
   data-draggable={draggable ? "yes" : "no"}
   data-status={task.status}
@@ -106,7 +106,7 @@
   </div>
   {#if canConfirm}
     <div
-      class="hidden group-hover/card:flex group-focus-within/card:flex gap-1.5"
+      class="absolute top-2.5 right-2.5 z-10 hidden group-hover/card:flex group-focus-within/card:flex gap-1.5"
       role="toolbar"
       aria-label="快速操作"
     >
