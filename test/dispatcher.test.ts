@@ -8,7 +8,7 @@ import {
   shouldPauseGlobal,
   shouldPauseWorker,
   type DispatchState,
-} from "../src/dispatcher"
+} from "../src/dispatcher/policy"
 
 const base: DispatchState = {
   primary: true,
