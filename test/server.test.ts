@@ -171,6 +171,21 @@ describe("REST API", () => {
     expect(r.status).toBe(404)
     expect(((await r.json()) as { error: { code: string } }).error.code).toBe("not_found")
   })
+
+  test("DELETE 不带 Content-Type 也成功；错 token 仍 403", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    const base = setup(s)
+    const created = await (await fetch(`${base}/api/tasks`, { method: "POST", headers: H, body: JSON.stringify({ title: "待删" }) })).json()
+
+    const ok = await fetch(`${base}/api/tasks/${created.id}`, { method: "DELETE", headers: { "X-Taskboard-Token": "tok123" } })
+    expect(ok.status).toBe(200)
+
+    const again = await fetch(`${base}/api/tasks/${created.id}`, { method: "DELETE", headers: { "X-Taskboard-Token": "tok123" } })
+    expect(again.status).toBe(404)
+
+    const deny = await fetch(`${base}/api/tasks/task_x`, { method: "DELETE", headers: { "X-Taskboard-Token": "wrong" } })
+    expect(deny.status).toBe(403)
+  })
 })
 
 describe("工具操作代理路由", () => {

@@ -62,12 +62,12 @@ export function createServer(
 ): ServerHandle {
   const { token, webDir } = opts
 
-  const guard = (req: Request): Response | undefined => {
+  const guard = (req: Request, json = true): Response | undefined => {
     if (req.headers.get("X-Taskboard-Token") !== token) {
       return Response.json({ error: { code: "forbidden", message: "缺少或错误的访问令牌" } }, { status: 403 })
     }
     const ct = req.headers.get("Content-Type") ?? ""
-    if (!ct.includes("application/json")) {
+    if (json && !ct.includes("application/json")) {
       return Response.json({ error: { code: "unsupported_media_type", message: "Content-Type 必须为 application/json" } }, { status: 415 })
     }
     return undefined
@@ -266,7 +266,7 @@ export function createServer(
         return Response.json(task)
       }
       if (method === "DELETE") {
-        const bad = guard(req)
+        const bad = guard(req, false)
         if (bad) return bad
         await store.remove(id)
         await emitSnapshot()
