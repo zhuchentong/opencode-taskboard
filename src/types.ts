@@ -90,6 +90,8 @@ export interface Task {
   spanLog?: SpanRecord[]
   /** 轮次 = 进 pending 的次数（首轮 1；打回重做递增，问答往复不计入）；由 transitionSpans 维护 */
   round?: number
+  /** 所属看板项目;缺省(老任务)读取时归一化为默认项目 */
+  projectId?: string
   createdAt: number
   updatedAt: number
 }
@@ -135,6 +137,8 @@ export interface TaskPatch {
   status?: Status
   title?: string
   description?: string
+  /** 挪项目;空串归一到默认项目;目标项目必须存在 */
+  projectId?: string
   action?: "confirm" | "reject" | "comment"
   comment?: string
 }

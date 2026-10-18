@@ -5,6 +5,12 @@ import { DEFAULT_PROJECT_ID, StoreError } from "../src/types"
 const S = (opts?: { directory?: string }) =>
   createStore(memoryBackend(), { requireAnalysisConfirm: false, ...opts })
 
+/** 带 backend 的构造:老结构任务注入用 */
+const SB = (opts?: { directory?: string }) => {
+  const backend = memoryBackend()
+  return { store: createStore(backend, { requireAnalysisConfirm: false, ...opts }), backend }
+}
+
 const codeOf = (p: Promise<unknown>) =>
   p.then(
     () => "no-error",
@@ -86,6 +92,66 @@ describe("项目 CRUD 与合成默认项目", () => {
     const p = await s.createProject({ name: "临时", workspace: "/t" })
     await s.deleteProject(p.id)
     expect(await codeOf(s.getProject(p.id))).toBe("not_found")
+    expect((await s.listProjects()).map((x) => x.name)).toEqual(["默认项目"])
+  })
+})
+
+describe("任务项目归属", () => {
+  test("create 缺省落默认项目(落盘显式 projectId)", async () => {
+    const t = await S().create({ title: "T" })
+    expect(t.projectId).toBe(DEFAULT_PROJECT_ID)
+  })
+
+  test("create 指定项目归属;项目不存在 → not_found", async () => {
+    const s = S()
+    const p = await s.createProject({ name: "P", workspace: "/p" })
+    const t = await s.create({ title: "T", projectId: p.id })
+    expect(t.projectId).toBe(p.id)
+    expect(await codeOf(s.create({ title: "X", projectId: "project_missing" }))).toBe("not_found")
+  })
+
+  test("patch 挪项目;目标不存在 → not_found;空串归一到默认项目", async () => {
+    const s = S()
+    const a = await s.createProject({ name: "A", workspace: "/a" })
+    const t = await s.create({ title: "T" })
+    const moved = await s.patch(t.id, { projectId: a.id })
+    expect(moved.projectId).toBe(a.id)
+    expect(await codeOf(s.patch(t.id, { projectId: "project_missing" }))).toBe("not_found")
+    const back = await s.patch(t.id, { projectId: "" })
+    expect(back.projectId).toBe(DEFAULT_PROJECT_ID)
+  })
+
+  test("读取归一化:注入无 projectId 的老结构任务,list/get 读出 DEFAULT_PROJECT_ID", async () => {
+    const { store, backend } = SB()
+    const legacy = {
+      id: "task_old",
+      title: "老任务",
+      description: "",
+      status: "pending",
+      comments: [],
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    await backend.set("task/task_old", legacy)
+    expect((await store.get("task_old")).projectId).toBe(DEFAULT_PROJECT_ID)
+    expect((await store.list()).find((x) => x.id === "task_old")?.projectId).toBe(DEFAULT_PROJECT_ID)
+  })
+
+  test("deleteProject 项目下有非 done 任务 → conflict", async () => {
+    const s = S()
+    const p = await s.createProject({ name: "P", workspace: "/p" })
+    await s.create({ title: "T", projectId: p.id })
+    expect(await codeOf(s.deleteProject(p.id))).toBe("conflict")
+  })
+
+  test("deleteProject 仅剩 done 任务 → 放行且这些任务被级联删除", async () => {
+    const s = S()
+    const p = await s.createProject({ name: "Q", workspace: "/q" })
+    const t = await s.create({ title: "T", projectId: p.id })
+    await s.patch(t.id, { status: "done" })
+    await s.deleteProject(p.id)
+    expect(await codeOf(s.getProject(p.id))).toBe("not_found")
+    expect(await codeOf(s.get(t.id))).toBe("not_found")
     expect((await s.listProjects()).map((x) => x.name)).toEqual(["默认项目"])
   })
 })

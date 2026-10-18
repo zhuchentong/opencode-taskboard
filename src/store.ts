@@ -75,7 +75,7 @@ const CONFIRM_FROM: Record<"confirm" | "reject" | "comment", ReadonlySet<Status>
 export interface Store {
   list(): Promise<Task[]>
   get(id: string): Promise<Task>
-  create(input: { title: string; description?: string }): Promise<Task>
+  create(input: { title: string; description?: string; projectId?: string }): Promise<Task>
   remove(id: string): Promise<void>
   patch(id: string, p: TaskPatch): Promise<Task>
   getSettings(): Promise<BoardSettings>
@@ -168,6 +168,13 @@ export function createStore(
 
   const newProjectId = () => `project_${crypto.randomUUID().slice(0, 8)}`
 
+  /** 任务项目归属归一:空串/缺省 → 默认项目;非默认须经 readProject 校验存在 */
+  const resolveProjectId = async (v: string | undefined): Promise<string> => {
+    const id = v && v.trim() ? v : DEFAULT_PROJECT_ID
+    await readProject(id) // 不存在 → not_found
+    return id
+  }
+
   // 人工拖拽的 claim 维护（spec §5.4）；confirm/reject 动作不走此逻辑
   const applyDragClaim = (prev: Task, next: Task, now: number): void => {
     const to = CLAIM_STATES.has(next.status)
@@ -185,17 +192,20 @@ export function createStore(
       const entries = await backend.scan(TASK_PREFIX)
       return entries
         .map((e) => e.value as Task)
+        .map((t) => (t.projectId ? t : { ...t, projectId: DEFAULT_PROJECT_ID }))
         .sort((a, b) => b.updatedAt - a.updatedAt)
     },
 
     async get(id) {
-      return readTask(id)
+      const t = await readTask(id)
+      return t.projectId ? t : { ...t, projectId: DEFAULT_PROJECT_ID }
     },
 
     create(input) {
       return serialized(async () => {
         const title = typeof input.title === "string" ? input.title.trim() : ""
         if (!title) throw new StoreError("invalid_input", "任务标题不能为空")
+        const projectId = await resolveProjectId(input.projectId)
         const now = Date.now()
         const task: Task = {
           id: newId(),
@@ -203,6 +213,7 @@ export function createStore(
           description: input.description ?? "",
           status: "planning",
           comments: [],
+          projectId,
           createdAt: now,
           updatedAt: now,
         }
@@ -260,6 +271,7 @@ export function createStore(
           next.title = title
         }
         if (p.description !== undefined) next.description = p.description
+        if (p.projectId !== undefined) next.projectId = await resolveProjectId(p.projectId)
 
         transitionSpans(task, next, now)
         // 进入「待领取」即开新一轮排队计时（拖入 / 打回 / 放弃回 pending）；已在 pending 不重置
@@ -459,6 +471,15 @@ export function createStore(
       return serialized(async () => {
         if (id === DEFAULT_PROJECT_ID) throw new StoreError("invalid_input", "默认项目不可删除")
         if (!(await backend.get(PROJECT_PREFIX + id))) throw new StoreError("not_found", `项目不存在：${id}`)
+        // 守卫与级联同块原子:非 done 任务存在 → 拒删;仅剩 done → 随项目级联清理
+        const entries = await backend.scan(TASK_PREFIX)
+        const owned = entries
+          .map((e) => e.value as Task)
+          .filter((t) => (t.projectId ?? DEFAULT_PROJECT_ID) === id)
+        if (owned.some((t) => t.status !== "done")) {
+          throw new StoreError("conflict", `项目下还有未完成任务，不能删除：${id}`)
+        }
+        for (const t of owned) await backend.remove(TASK_PREFIX + t.id)
         await backend.remove(PROJECT_PREFIX + id)
       })
     },
