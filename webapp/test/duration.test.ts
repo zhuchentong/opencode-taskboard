@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { PHASE_LABELS, formatClock, formatDuration, formatPhaseLine, formatPhaseTooltip, hasRunningSpan, needsTicker, phaseViews, queueWaitMs } from "../src/lib/duration"
+import { PHASE_LABELS, formatClock, formatDuration, formatPhaseLine, formatPhaseTooltip, hasRunningSpan, needsTicker, phaseViews, queueWaitMs, summarizeSpans } from "../src/lib/duration"
 import type { Status, Task } from "../src/lib/types"
 
 const T = (status: Status, spans?: Task["spans"], over?: Partial<Task>): Task => ({
@@ -197,5 +197,67 @@ describe("needsTicker（心跳开关）", () => {
   test("终态任务无在途计时与排队 → 停摆", () => {
     expect(needsTicker(T("done"))).toBe(false)
     expect(needsTicker(T("analysis_confirm", { analyzing: { startedAt: 1, endedAt: 2 } }))).toBe(false)
+  })
+})
+
+describe("summarizeSpans(分段计时汇总)", () => {
+  const t = (spanLog?: Task["spanLog"], over: Partial<Task> = {}): Task => ({
+    id: "task_x",
+    title: "t",
+    description: "",
+    status: "analyzing",
+    comments: [],
+    createdAt: 500,
+    updatedAt: 7000,
+    ...(spanLog ? { spanLog } : {}),
+    ...over,
+  })
+
+  test("多段:逐段行(中文标签/轮次/起止/耗时)+ 活跃合计 + 墙钟", () => {
+    const s = summarizeSpans(
+      t([
+        { phase: "pending", round: 2, startedAt: 1000, endedAt: 2000 },
+        { phase: "analyzing", round: 2, startedAt: 2000, endedAt: 4000 },
+      ]),
+      8000,
+    )
+    expect(s.rows).toEqual([
+      { phase: "pending", label: "排队", round: 2, start: 1000, end: 2000, ms: 1000, running: false },
+      { phase: "analyzing", label: "分析中", round: 2, start: 2000, end: 4000, ms: 2000, running: false },
+    ])
+    expect(s.activeTotal).toBe(3000)
+    expect(s.wallClock).toBe(7500) // createdAt 500 → now 8000
+  })
+
+  test("进行中的段:耗时以 now 实时计算、end 为 null、running=true", () => {
+    const s = summarizeSpans(t([{ phase: "analyzing", round: 1, startedAt: 2000 }]), 4500)
+    expect(s.rows[0]).toEqual({
+      phase: "analyzing", label: "分析中", round: 1, start: 2000, end: null, ms: 2500, running: true,
+    })
+    expect(s.activeTotal).toBe(2500)
+  })
+
+  test("阶段中文标签:排队/分析中/待确认/执行中", () => {
+    const s = summarizeSpans(
+      t([
+        { phase: "pending", round: 1, startedAt: 1000, endedAt: 1100 },
+        { phase: "analysis_confirm", round: 1, startedAt: 1100, endedAt: 1200 },
+        { phase: "executing", round: 1, startedAt: 1200, endedAt: 1300 },
+      ]),
+      8000,
+    )
+    expect(s.rows.map((r) => r.label)).toEqual(["排队", "待确认", "执行中"])
+  })
+
+  test("空 spanLog(旧任务):rows 空、activeTotal null、墙钟仍可用", () => {
+    const s = summarizeSpans(t(undefined), 8000)
+    expect(s.rows).toEqual([])
+    expect(s.activeTotal).toBeNull()
+    expect(s.wallClock).toBe(7500)
+  })
+
+  test("终态任务(done)墙钟冻结于 updatedAt 而非 now", () => {
+    const s = summarizeSpans(t([], { status: "done", updatedAt: 6000 }), 8000)
+    expect(s.wallClock).toBe(5500) // createdAt 500 → updatedAt 6000
   })
 })

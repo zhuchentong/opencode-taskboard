@@ -5,7 +5,7 @@ export const PHASES = ["analyzing", "executing"] as const
 export type Phase = (typeof PHASES)[number]
 
 /** 分段账本覆盖的阶段：比旧 PHASES 多一个 analysis_confirm（等待段只记时长不记 token） */
-const SPAN_PHASES = ["analyzing", "executing", "analysis_confirm"] as const
+const SPAN_PHASES = ["pending", "analyzing", "executing", "analysis_confirm"] as const
 type SpanPhase = (typeof SPAN_PHASES)[number]
 
 export function phaseOf(status: Status): Phase | undefined {

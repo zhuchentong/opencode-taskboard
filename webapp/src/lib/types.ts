@@ -42,7 +42,7 @@ export interface TaskUsage {
  * 问答循环/打回重做的每一段时长独立留存；段间消耗由展示层做差（二期）。
  */
 export interface SpanRecord {
-  phase: "analyzing" | "executing" | "analysis_confirm"
+  phase: "pending" | "analyzing" | "executing" | "analysis_confirm"
   /** 第几轮（进 pending 次数，首轮为 1；打回重做递增，问答往复不计入） */
   round: number
   /** 归因到会话；人工操作段（human claim）缺省 */

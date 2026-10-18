@@ -31,7 +31,7 @@ export interface PhaseSpan {
  * usage 为封口时刻从 task.usage 拷贝的累计快照，段间消耗由展示层做差（二期）。
  */
 export interface SpanRecord {
-  phase: "analyzing" | "executing" | "analysis_confirm"
+  phase: "pending" | "analyzing" | "executing" | "analysis_confirm"
   /** 第几轮（进 pending 次数，首轮为 1；打回重做递增，问答往复不计入） */
   round: number
   /** 归因到会话；人工操作段（human claim）缺省 */

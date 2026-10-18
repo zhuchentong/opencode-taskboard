@@ -1,9 +1,17 @@
-import type { Task } from "./types"
+import type { SpanRecord, Task } from "./types"
 
 /** 计时阶段与其中文标签（顺序即展示顺序：分析 → 执行） */
 export const PHASES = ["analyzing", "executing"] as const
 export type Phase = (typeof PHASES)[number]
 export const PHASE_LABELS: Record<Phase, string> = { analyzing: "分析", executing: "执行" }
+
+/** spanLog 分段的中文标签 */
+const SPAN_LABELS: Record<SpanRecord["phase"], string> = {
+  pending: "排队",
+  analyzing: "分析中",
+  analysis_confirm: "待确认",
+  executing: "执行中",
+}
 
 const MIN = 60_000
 const HOUR = 3_600_000
@@ -96,4 +104,44 @@ export function formatPhaseTooltip(task: Task, now: number): string {
       return `${v.label}：${start} → ${end} · 用时 ${formatDuration(v.duration)}`
     })
     .join("\n")
+}
+
+/* ============ 分段计时汇总（spanLog 账本 → 表格行 + 双口径汇总） ============ */
+
+export interface SpanRow {
+  phase: SpanRecord["phase"]
+  label: string
+  round: number
+  start: number
+  /** 缺省 = 段仍在进行 */
+  end: number | null
+  ms: number
+  running: boolean
+}
+
+export interface SpanSummary {
+  rows: SpanRow[]
+  /** 各段耗时求和（活跃工作时长）；旧任务无账本时为 null */
+  activeTotal: number | null
+  /** 墙钟时长：创建 → (done 冻结于 updatedAt | now) */
+  wallClock: number
+}
+
+export function summarizeSpans(task: Task, now: number): SpanSummary {
+  const log = task.spanLog ?? []
+  const rows: SpanRow[] = log.map((s) => {
+    const running = s.endedAt === undefined
+    return {
+      phase: s.phase,
+      label: SPAN_LABELS[s.phase] ?? s.phase,
+      round: s.round,
+      start: s.startedAt,
+      end: s.endedAt ?? null,
+      ms: (s.endedAt ?? now) - s.startedAt,
+      running,
+    }
+  })
+  const activeTotal = log.length === 0 ? null : rows.reduce((acc, r) => acc + Math.max(0, r.ms), 0)
+  const wallClock = (task.status === "done" ? task.updatedAt : now) - task.createdAt
+  return { rows, activeTotal, wallClock }
 }

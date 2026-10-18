@@ -7,7 +7,7 @@
   import * as Tabs from "$lib/components/ui/tabs"
   import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "$lib/components/ui/table"
   import { STATUS_LABELS, timeAgo } from "$lib/board"
-  import { formatClock, formatDuration, phaseViews, queueWaitMs } from "$lib/duration"
+  import { formatClock, formatDuration, phaseViews, queueWaitMs, summarizeSpans } from "$lib/duration"
   import { ticker } from "$lib/ticker.svelte"
   import { confirmDialog } from "$lib/notify"
   import { formatTokens, totalTokens } from "$lib/usage"
@@ -56,6 +56,8 @@
   const canConfirm = $derived(CONFIRM_COLS.includes(task.status))
   // 两段计时明细；进行中的段随心跳逐秒递增
   const views = $derived(phaseViews(task, ticker.now))
+  // 分段计时汇总（spanLog 账本：排队/分析/待确认/执行每段独立留存，含问答循环与打回重做）
+  const spanSummary = $derived(summarizeSpans(task, ticker.now))
   const queueMs = $derived(queueWaitMs(task, ticker.now))
   // 消耗明细行（顺序即展示顺序）；合计单列一行
   const USAGE_ROWS: { key: keyof Omit<TaskUsage, "at">; label: string }[] = [
@@ -233,6 +235,41 @@
                       <TableCell class="text-right tabular-nums">{v.running ? `已 ${formatDuration(v.duration)}` : formatDuration(v.duration)}</TableCell>
                     </TableRow>
                   {/each}
+                </TableBody>
+              </Table>
+            </section>
+          {/if}
+
+          {#if spanSummary.rows.length > 0}
+            <section class="grid gap-1.5 rounded-lg border p-2.5">
+              <h3 class="text-[13px] font-medium">分段计时</h3>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>阶段</TableHead>
+                    <TableHead>开始</TableHead>
+                    <TableHead>结束</TableHead>
+                    <TableHead class="text-right">耗时</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {#each spanSummary.rows as r (r.phase + r.start)}
+                    <TableRow>
+                      <TableCell>
+                        {r.label}
+                        <span class="ml-1 text-[11px] text-muted-foreground">R{r.round}</span>
+                        {#if r.running}<Badge variant="secondary">进行中</Badge>{/if}
+                      </TableCell>
+                      <TableCell class="text-[12px]">{formatClock(r.start)}</TableCell>
+                      <TableCell class="text-[12px]">{r.running ? "—" : formatClock(r.end!)}</TableCell>
+                      <TableCell class="text-right tabular-nums">{formatDuration(r.ms)}</TableCell>
+                    </TableRow>
+                  {/each}
+                  <TableRow>
+                    <TableCell colspan="4" class="text-right text-[12px] text-muted-foreground">
+                      活跃合计 {formatDuration(spanSummary.activeTotal ?? 0)} · 墙钟 {formatDuration(spanSummary.wallClock)}
+                    </TableCell>
+                  </TableRow>
                 </TableBody>
               </Table>
             </section>
