@@ -1,4 +1,4 @@
-import { StoreError, isStoreErrorCode, type Task, type TaskPatch } from "./types"
+import { StoreError, isStoreErrorCode, type Project, type Task, type TaskPatch } from "./types"
 import type { Store } from "./store"
 
 /**
@@ -88,6 +88,25 @@ export function clientStore(base: string, token: string, opts?: { timeoutMs?: nu
     },
     async recordUsage(input) {
       return post(`/api/tasks/${encodeURIComponent(input.id)}/usage`, { usage: input.usage })
+    },
+    async listProjects() {
+      const d = await call<{ projects: Project[] }>("/api/projects")
+      return d.projects
+    },
+    async getProject(id) {
+      return call<Project>(`/api/projects/${encodeURIComponent(id)}`)
+    },
+    async createProject(input) {
+      return post("/api/projects", input)
+    },
+    async updateProject(id, patch) {
+      return call<Project>(`/api/projects/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      })
+    },
+    async deleteProject(id) {
+      await call<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" })
     },
   }
 }

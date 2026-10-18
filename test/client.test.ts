@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { createStore, memoryBackend } from "../src/store"
 import { createServer, type ServerHandle } from "../src/server"
 import { clientStore } from "../src/client"
+import { DEFAULT_PROJECT_ID } from "../src/types"
 
 describe("clientStore（HTTP Store 实现）", () => {
   test("完整闭环经 HTTP 与本地 store 等价；错误映射为 StoreError", async () => {
@@ -28,6 +29,12 @@ describe("clientStore（HTTP Store 实现）", () => {
 
       expect((await s.get(t.id)).comments).toHaveLength(1)
       expect((await s.list()).map((x) => x.id)).toContain(t.id)
+
+      const proj = await s.createProject({ name: "远程项目", workspace: process.cwd() })
+      expect(proj.id.startsWith("project_")).toBe(true)
+      const ps = await s.listProjects()
+      expect(ps[0].id).toBe(DEFAULT_PROJECT_ID)
+      expect(ps.map((x) => x.name)).toContain("远程项目")
 
       await s.setSettings({ requireAnalysisConfirm: true })
       expect(await s.getSettings()).toEqual({ requireAnalysisConfirm: true, autoDispatch: true })

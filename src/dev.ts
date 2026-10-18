@@ -3,7 +3,7 @@
 import { createStore, memoryBackend } from "./store"
 import { createServer } from "./server"
 
-const store = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+const store = createStore(memoryBackend(), { requireAnalysisConfirm: false, directory: process.cwd() })
 
 // 预置三条不同阶段的样例任务
 await store.create({ title: "示例：梳理登录模块的问题", description: "处于待规划，补充清楚目标后再拖到待领取" })

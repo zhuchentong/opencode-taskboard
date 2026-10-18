@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { createStore, memoryBackend } from "../src/store"
 import { createServer, type ServerHandle } from "../src/server"
-import type { Store } from "../src/types"
+import { DEFAULT_PROJECT_ID, type Store } from "../src/types"
 
 const FIXDIR = "test/.webroot-fixture"
 
@@ -335,5 +337,119 @@ describe("模型列表路由", () => {
     const base = setup(s)
     const r = await fetch(`${base}/api/models`).then((x) => x.json())
     expect(r).toEqual({ models: [] })
+  })
+})
+
+describe("项目 API", () => {
+  const realDir = () => mkdtempSync(join(tmpdir(), "tb-proj-"))
+
+  test("GET /api/projects 无鉴权返回含合成默认项目", async () => {
+    const base = setup(createStore(memoryBackend(), { requireAnalysisConfirm: false }))
+    const r = await fetch(`${base}/api/projects`)
+    expect(r.status).toBe(200)
+    const { projects } = (await r.json()) as { projects: { id: string; name: string }[] }
+    expect(projects[0]).toMatchObject({ id: DEFAULT_PROJECT_ID, name: "默认项目" })
+  })
+
+  test("POST 无 token → 403", async () => {
+    const base = setup(createStore(memoryBackend(), { requireAnalysisConfirm: false }))
+    const r = await fetch(`${base}/api/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    })
+    expect(r.status).toBe(403)
+  })
+
+  test("POST 相对路径/不存在目录/指向文件 → 400 invalid_input 文案含路径", async () => {
+    const base = setup(createStore(memoryBackend(), { requireAnalysisConfirm: false }))
+    const dir = realDir()
+    const file = join(dir, "f.txt")
+    writeFileSync(file, "x")
+    for (const workspace of ["relative/path", join(dir, "nope"), file]) {
+      const r = await fetch(`${base}/api/projects`, {
+        method: "POST",
+        headers: H,
+        body: JSON.stringify({ name: `N-${workspace}`, workspace }),
+      })
+      expect(r.status).toBe(400)
+      const body = (await r.json()) as { error: { code: string; message: string } }
+      expect(body.error.code).toBe("invalid_input")
+      expect(body.error.message).toContain(workspace)
+    }
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test("POST 合法目录 → 201 落库;重名 → 400 conflict", async () => {
+    const base = setup(createStore(memoryBackend(), { requireAnalysisConfirm: false }))
+    const dir = realDir()
+    const r1 = await fetch(`${base}/api/projects`, {
+      method: "POST",
+      headers: H,
+      body: JSON.stringify({ name: "网关", workspace: dir }),
+    })
+    expect(r1.status).toBe(201)
+    const r2 = await fetch(`${base}/api/projects`, {
+      method: "POST",
+      headers: H,
+      body: JSON.stringify({ name: "网关", workspace: dir }),
+    })
+    expect(r2.status).toBe(400)
+    expect(((await r2.json()) as { error: { code: string } }).error.code).toBe("conflict")
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test("PATCH 改名成功;DELETE 非 done 守卫 → 400;仅 done → 200 且任务被级联", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    const base = setup(s)
+    const dir = realDir()
+    const p = await s.createProject({ name: "P", workspace: dir })
+    const t1 = await s.create({ title: "进行中", projectId: p.id })
+    const rd = await fetch(`${base}/api/projects/${p.id}`, {
+      method: "PATCH",
+      headers: H,
+      body: JSON.stringify({ name: "P2" }),
+    })
+    expect(rd.status).toBe(200)
+    const rDel = await fetch(`${base}/api/projects/${p.id}`, { method: "DELETE", headers: H })
+    expect(rDel.status).toBe(400)
+    await s.patch(t1.id, { status: "done" })
+    const rDel2 = await fetch(`${base}/api/projects/${p.id}`, { method: "DELETE", headers: H })
+    expect(rDel2.status).toBe(200)
+    const tasks = (await (await fetch(`${base}/api/tasks`)).json()) as { id: string }[]
+    expect(tasks.map((x) => x.id)).not.toContain(t1.id)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test("SSE 首个 snapshot 事件含 projects 数组(默认项目打头)", async () => {
+    const base = setup(createStore(memoryBackend(), { requireAnalysisConfirm: false, directory: "/proj" }))
+    const res = await fetch(`${base}/api/events`)
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader()
+    const { value } = await reader.read()
+    const frames = new TextDecoder()
+      .decode(value)
+      .split("\n\n")
+      .filter((f) => f.startsWith("data: "))
+    const evt = frames.map((f) => JSON.parse(f.slice(6))).find((e) => e.type === "snapshot")
+    expect(evt.projects[0]).toMatchObject({ id: DEFAULT_PROJECT_ID, workspace: "/proj" })
+    await reader.cancel()
+  })
+
+  test("POST /api/tasks 带 projectId 落正确归属;不带落默认项目", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    const base = setup(s)
+    const p = await s.createProject({ name: "P", workspace: realDir() })
+    const r1 = await fetch(`${base}/api/tasks`, {
+      method: "POST",
+      headers: H,
+      body: JSON.stringify({ title: "归属", projectId: p.id }),
+    })
+    expect(((await r1.json()) as { projectId: string }).projectId).toBe(p.id)
+    const r2 = await fetch(`${base}/api/tasks`, {
+      method: "POST",
+      headers: H,
+      body: JSON.stringify({ title: "缺省" }),
+    })
+    expect(((await r2.json()) as { projectId: string }).projectId).toBe(DEFAULT_PROJECT_ID)
   })
 })

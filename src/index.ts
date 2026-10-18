@@ -161,7 +161,11 @@ export default Plugin.define({
 
     log(`启动：project=${projectID} port=${port} requireAnalysisConfirm=${requireAnalysisConfirm}`)
 
-    const localStore = createStore(storageBackend(ctx.storage, `${projectID}/`), { requireAnalysisConfirm })
+    const localStore = createStore(storageBackend(ctx.storage, `${projectID}/`), {
+      requireAnalysisConfirm,
+      // 默认项目合成 workspace 的来源:worker 会话工作目录(不传则显示"(未配置)"占位)
+      directory: ctx.location.directory,
+    })
 
     // token 持久化：重启与多实例之间共享同一令牌
     let token = (await ctx.storage.get(`${projectID}/settings/token`)) as string | undefined

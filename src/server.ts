@@ -1,8 +1,9 @@
-import { join } from "node:path"
+import { isAbsolute, join } from "node:path"
+import { statSync } from "node:fs"
 import { StoreError } from "./types"
-import type { BoardSettings, Store, Task } from "./types"
+import type { BoardSettings, Project, Store, Task } from "./types"
 
-export type ServerEvent = { type: "hello" } | { type: "snapshot"; tasks: Task[]; settings: BoardSettings }
+export type ServerEvent = { type: "hello" } | { type: "snapshot"; tasks: Task[]; settings: BoardSettings; projects: Project[] }
 
 export interface ServerHandle {
   server: Bun.Server
@@ -83,6 +84,22 @@ export function createServer(
     }
   }
 
+  /** 项目工作区校验(路由层职责,store 保持纯数据层):绝对路径 + 存在且为目录;错误文案含路径 */
+  function validWorkspaceOrThrow(workspace: unknown): string {
+    if (typeof workspace !== "string" || workspace.trim() === "") {
+      throw new StoreError("invalid_input", "工作区不能为空")
+    }
+    if (!isAbsolute(workspace)) throw new StoreError("invalid_input", `工作区必须是绝对路径：${workspace}`)
+    let isDir = false
+    try {
+      isDir = statSync(workspace).isDirectory()
+    } catch {
+      throw new StoreError("invalid_input", `工作区目录不存在：${workspace}`)
+    }
+    if (!isDir) throw new StoreError("invalid_input", `工作区不是目录：${workspace}`)
+    return workspace
+  }
+
   const encoder = new TextEncoder()
   const subscribers = new Set<Subscriber>()
 
@@ -110,7 +127,12 @@ export function createServer(
 
   async function emitSnapshot(): Promise<void> {
     const tasks = await store.list()
-    emit({ type: "snapshot", tasks, settings: await store.getSettings() })
+    emit({
+      type: "snapshot",
+      tasks,
+      settings: await store.getSettings(),
+      projects: await store.listProjects(),
+    })
     if (opts.onWrite) setTimeout(() => opts.onWrite(tasks), 0)
   }
 
@@ -201,13 +223,55 @@ export function createServer(
         return Response.json(await store.getSettings())
       }
     }
+    if (pathname === "/api/projects") {
+      if (method === "GET") return Response.json({ projects: await store.listProjects() })
+      if (method === "POST") {
+        const bad = guard(req)
+        if (bad) return bad
+        const body = await readJson(req)
+        const project = await store.createProject({
+          name: String(body.name ?? ""),
+          workspace: validWorkspaceOrThrow(body.workspace),
+          description: typeof body.description === "string" ? body.description : undefined,
+        })
+        await emitSnapshot()
+        return Response.json(project, { status: 201 })
+      }
+    }
+    const projMatch = pathname.match(/^\/api\/projects\/([^/]+)$/)
+    if (projMatch) {
+      const pid = decodeURIComponent(projMatch[1])
+      if (method === "PATCH") {
+        const bad = guard(req)
+        if (bad) return bad
+        const body = await readJson(req)
+        const project = await store.updateProject(pid, {
+          name: typeof body.name === "string" ? body.name : undefined,
+          workspace: body.workspace !== undefined ? validWorkspaceOrThrow(body.workspace) : undefined,
+          description: typeof body.description === "string" ? body.description : undefined,
+        })
+        await emitSnapshot()
+        return Response.json(project)
+      }
+      if (method === "DELETE") {
+        const bad = guard(req, false)
+        if (bad) return bad
+        await store.deleteProject(pid)
+        await emitSnapshot()
+        return Response.json({ ok: true })
+      }
+    }
     if (pathname === "/api/tasks") {
       if (method === "GET") return Response.json(await store.list())
       if (method === "POST") {
         const bad = guard(req)
         if (bad) return bad
         const body = await readJson(req)
-        const task = await store.create({ title: String(body.title ?? ""), description: body.description as string | undefined })
+        const task = await store.create({
+          title: String(body.title ?? ""),
+          description: body.description as string | undefined,
+          projectId: typeof body.projectId === "string" ? body.projectId : undefined,
+        })
         await emitSnapshot()
         return Response.json(task, { status: 201 })
       }
