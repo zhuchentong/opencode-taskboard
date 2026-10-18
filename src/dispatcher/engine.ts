@@ -56,6 +56,10 @@ export function initDispatcher(
     projectID: string
     /** worker 会话的工作目录:必须显式传,否则回退到服务进程 cwd */
     directory: string
+    /** worker 会话显式模型(provider/model);缺省用 opencode 默认解析——
+     * 实测(2026-10-18)opencode 对无 model 的后台会话创建即挂起(time_suspended),
+     * 回合永不启动 → 任务无人领取。强烈建议配置(环境变量 TASKBOARD_MODEL)。 */
+    model?: { providerID: string; id: string }
   },
   deps: {
     store: Store
@@ -153,6 +157,9 @@ export function initDispatcher(
   const pool = createSessionPool({
     session: ctx.session,
     directory: ctx.directory,
+    // 实验:model 显式指定——无 model 的会话创建即被 opencode 挂起(time_suspended,
+    // 回合永不启动);见 ctx.model 注释与真实验收记录(2026-10-18)。
+    model: ctx.model ? { providerID: ctx.model.providerID, id: ctx.model.id } : undefined,
     claimWaitMs,
     patchTask: async (id, patch) => {
       // 契约(账本 Task 4 裁决):仅当任务仍在 pending 时撤回;否则视为已被领取。

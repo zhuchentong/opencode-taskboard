@@ -16,6 +16,8 @@ export interface SessionPoolDeps {
   session: DispatcherSession
   /** worker 会话的工作目录:必须显式传,否则回退到服务进程 cwd(实测曾落到 .debug/playground) */
   directory: string
+  /** 会话创建时显式指定的模型(provider/model);缺省用 opencode 默认解析 */
+  model?: { providerID: string; modelID: string }
   /** 派发后等待 worker 领取的时限 */
   claimWaitMs: number
   /** 注入 store.patch:超时撤任务(先撤任务再回收会话,顺序不能反) */
@@ -119,7 +121,10 @@ export function createSessionPool(deps: SessionPoolDeps) {
         const info = await deps.session.create({
           title: `看板:${task.title}`,
           location: { directory: deps.directory },
-        })
+          // 实验:显式指定 model——诊断发现无 model 的会话创建即被 opencode 挂起
+          // (time_suspended=创建时刻,回合永不启动);正常会话有模型。
+          ...(deps.model ? { model: deps.model } : {}),
+        } as never)
         sessionID = info.id
       } catch (e) {
         // 建会话失败:任务没被派出去,不计名额也不熔断,等下一轮评估重试

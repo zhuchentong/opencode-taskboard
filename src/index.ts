@@ -151,6 +151,19 @@ export default Plugin.define({
     })
     log(`就绪：${arb.primary ? "主实例" : "次要实例"} board=http://127.0.0.1:${arb.primaryPort}/`)
 
+    // worker 会话模型:opencode 对无 model 的后台会话创建即挂起(回合永不启动),
+    // 必须显式指定。从环境变量读取(provider/model 形态,与 ZHIPU_API_KEY 同一套 zshrc 机制)。
+    const taskboardModelSpec = process.env.TASKBOARD_MODEL
+    const taskboardModel = taskboardModelSpec
+      ? (() => {
+          const idx = taskboardModelSpec.indexOf("/")
+          return idx > 0
+            ? { providerID: taskboardModelSpec.slice(0, idx), id: taskboardModelSpec.slice(idx + 1) }
+            : undefined
+        })()
+      : undefined
+    if (taskboardModelSpec && !taskboardModel) log(`TASKBOARD_MODEL 格式错误(应为 provider/model):${taskboardModelSpec}`)
+
     // 自动派发器仅主实例装配（写都串行到主实例，次要实例派发会双派）
     let dispatcher: ReturnType<typeof initDispatcher> | null = null
     if (arb.primary) {
@@ -162,6 +175,7 @@ export default Plugin.define({
           // worker 会话必须在项目目录里工作；不传 location 会回退到服务进程 cwd
           // （实测曾落到 .debug/playground，worker 根本不在用户项目里）
           directory: ctx.location.directory,
+          ...(taskboardModel ? { model: taskboardModel } : {}),
         },
         {
           store: arb.store,
