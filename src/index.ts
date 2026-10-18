@@ -152,8 +152,9 @@ export default Plugin.define({
     log(`就绪：${arb.primary ? "主实例" : "次要实例"} board=http://127.0.0.1:${arb.primaryPort}/`)
 
     // worker 会话模型:opencode 对无 model 的后台会话创建即挂起(回合永不启动),
-    // 必须显式指定。从环境变量读取(provider/model 形态,与 ZHIPU_API_KEY 同一套 zshrc 机制)。
-    const taskboardModelSpec = process.env.TASKBOARD_MODEL
+    // 必须显式指定。来源优先级:opencode.json 的 plugin.taskboard.model(推荐,不依赖进程环境)。
+    const pluginOptions = (rawOpts as { plugin?: { taskboard?: { model?: string } } }).plugin?.taskboard
+    const taskboardModelSpec = pluginOptions?.model ?? (rawOpts as { model?: string }).model
     const taskboardModel = taskboardModelSpec
       ? (() => {
           const idx = taskboardModelSpec.indexOf("/")
@@ -162,7 +163,8 @@ export default Plugin.define({
             : undefined
         })()
       : undefined
-    if (taskboardModelSpec && !taskboardModel) log(`TASKBOARD_MODEL 格式错误(应为 provider/model):${taskboardModelSpec}`)
+    if (taskboardModelSpec && !taskboardModel) log(`TASKBOARD model 配置格式错误(应为 provider/model):${taskboardModelSpec}`)
+    log(`插件 options: ${JSON.stringify(rawOpts)} | worker model: ${taskboardModel ? taskboardModelSpec : "未配置(用 opencode 默认解析,已知会挂起)"}`)
 
     // 自动派发器仅主实例装配（写都串行到主实例，次要实例派发会双派）
     let dispatcher: ReturnType<typeof initDispatcher> | null = null

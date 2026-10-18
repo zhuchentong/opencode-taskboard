@@ -1,0 +1,8 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": {
+    "taskboard": {
+      "model": "0/opencode/nemotron-3.5-super-vl-free"
+    }
+  }
+}
