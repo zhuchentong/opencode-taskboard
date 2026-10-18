@@ -599,3 +599,31 @@ describe("pendingAt（排队计时起点）", () => {
     expect(claimed.pendingAt).toBe(t.pendingAt)
   })
 })
+
+describe("设置:阶段模型字段", () => {
+  test("仅 patch modelAnalyze 合法(字符串);未给出的字段保持不变", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    await s.setSettings({ modelAnalyze: "zhipuai-coding-plan/glm-5.3-flash" })
+    const out = await s.getSettings()
+    expect(out.modelAnalyze).toBe("zhipuai-coding-plan/glm-5.3-flash")
+    expect(out.modelExecute).toBeUndefined()
+    expect(out.autoDispatch).toBe(true)
+  })
+
+  test("modelExecute 可单独设置,空串合法(显式跟随默认)", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    await s.setSettings({ modelExecute: "" })
+    expect((await s.getSettings()).modelExecute).toBe("")
+  })
+
+  test("模型字段非字符串 → invalid_input", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    let msg = ""
+    try {
+      await s.setSettings({ modelAnalyze: 123 as never })
+    } catch (e) {
+      msg = (e as Error).message
+    }
+    expect(msg).toContain("必须为字符串")
+  })
+})

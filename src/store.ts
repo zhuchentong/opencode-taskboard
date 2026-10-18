@@ -245,14 +245,21 @@ export function createStore(
     setSettings(patch) {
       return serialized(async () => {
         // 合并写入：只更新给出的字段（旧版整体覆盖会抹掉未提交的设置项）
-        const keys = ["requireAnalysisConfirm", "autoDispatch"] as const
-        const provided = keys.filter((k) => patch?.[k] !== undefined)
+        const boolKeys = ["requireAnalysisConfirm", "autoDispatch"] as const
+        const strKeys = ["modelAnalyze", "modelExecute"] as const
+        const provided = [
+          ...boolKeys.filter((k) => patch?.[k] !== undefined),
+          ...strKeys.filter((k) => patch?.[k] !== undefined),
+        ]
         if (provided.length === 0) {
           throw new StoreError("invalid_input", "缺少设置字段")
         }
         for (const k of provided) {
-          if (typeof patch[k] !== "boolean") {
+          if (boolKeys.includes(k as (typeof boolKeys)[number]) && typeof patch[k] !== "boolean") {
             throw new StoreError("invalid_input", `${k} 必须为布尔值`)
+          }
+          if (strKeys.includes(k as (typeof strKeys)[number]) && typeof patch[k] !== "string") {
+            throw new StoreError("invalid_input", `${k} 必须为字符串`)
           }
         }
         const cur = await readSettings()
