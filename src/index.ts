@@ -152,9 +152,9 @@ export default Plugin.define({
     log(`就绪：${arb.primary ? "主实例" : "次要实例"} board=http://127.0.0.1:${arb.primaryPort}/`)
 
     // worker 会话模型:opencode 对无 model 的后台会话创建即挂起(回合永不启动),
-    // 必须显式指定。来源优先级:opencode.json 的 plugin.taskboard.model(推荐,不依赖进程环境)。
+    // 必须显式指定。来源:环境变量 TASKBOARD_MODEL(推荐,daemon 环境继承)> opencode.json 的 plugin.taskboard.model。
     const pluginOptions = (rawOpts as { plugin?: { taskboard?: { model?: string } } }).plugin?.taskboard
-    const taskboardModelSpec = pluginOptions?.model ?? (rawOpts as { model?: string }).model
+    const taskboardModelSpec = process.env.TASKBOARD_MODEL ?? pluginOptions?.model ?? (rawOpts as { model?: string }).model
     const taskboardModel = taskboardModelSpec
       ? (() => {
           const idx = taskboardModelSpec.indexOf("/")
