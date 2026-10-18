@@ -15,8 +15,7 @@ import type { DispatchContext, Guard } from "./types"
 export type { DispatchContext, DispatchState } from "./types"
 
 export const DISPATCH_CAPS = {
-  /** 每日派发上限(硬熔断) */
-  dailyCap: 100,
+  // 日派发上限(dailyCap)已按产品决策移除(2026-10-18):派发不再受日配额拒绝,todayCount 仅作观测。
   /**
    * 两次派发之间的最小间隔(**全局节流**,不是每 worker 各自节流)。
    * 主要作用是错峰:填满 6 个槽位时每隔 0.5s 出一个会话,避免同时抢 API。
@@ -71,23 +70,22 @@ export const GUARDS: Guard[] = [
         ? "interval"
         : null,
   },
-  { name: "cap", check: (ctx, caps) => (ctx.todayCount >= caps.dailyCap ? "cap" : null) },
 ]
 
 /**
  * 依次执行守卫链;首个拒绝原因即返回,全过返回 ok。
  * opts 供测试/接线注入时间常数覆盖(行为与旧 if 链完全一致)。
- * 判定顺序:primary → enabled → paused → empty → concurrency-full → cooldown → interval → cap。
+ * 判定顺序:primary → enabled → paused → empty → concurrency-full → cooldown → interval。
+ * 日派发上限(cap)已按产品决策移除:派发不受日配额拒绝,todayCount 仅作观测展示。
  * 并发维度用 concurrency-full 取代原「worker 是否忙」判定:多 worker 下只有槽位是硬约束,
  * 若继续按 worker 名下 claim 判忙,单 worker 名下一有未完成 claim 就会把并发锁死为 1。
  */
 export function shouldDispatch(
   s: DispatchContext,
-  opts?: { minIntervalMs?: number; dailyCap?: number; maxConcurrent?: number },
+  opts?: { minIntervalMs?: number; maxConcurrent?: number },
 ): { ok: boolean; reason: string } {
   const caps = {
     minIntervalMs: opts?.minIntervalMs ?? DISPATCH_CAPS.minIntervalMs,
-    dailyCap: opts?.dailyCap ?? DISPATCH_CAPS.dailyCap,
     maxConcurrent: opts?.maxConcurrent ?? DISPATCH_CAPS.maxConcurrent,
   }
   for (const guard of GUARDS) {

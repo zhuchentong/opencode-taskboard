@@ -357,7 +357,6 @@ export function initDispatcher(
         activeCount: active,
         inCooldown: inCooldown(),
         lastDispatchAgeMs: lastDispatchAt ? nowMs - lastDispatchAt : null,
-        todayCount,
       },
       { minIntervalMs: deps.minIntervalMs ?? DISPATCH_CAPS.minIntervalMs },
     )

@@ -66,8 +66,6 @@ export interface DispatchState {
   inCooldown: boolean
   /** 距上次派发的毫秒数(从未派发过为 null) */
   lastDispatchAgeMs: number | null
-  /** 当日已派发次数 */
-  todayCount: number
 }
 
 /** 派发决策上下文 = 旧 DispatchState(别名保留,旧矩阵兼容) */
@@ -81,14 +79,13 @@ export type GuardName =
   | "concurrency-full"
   | "cooldown"
   | "interval"
-  | "cap"
 
 /** 派发守卫:返回拒绝原因字符串,或 null 放行。链序即判定优先级。 */
 export interface Guard {
   name: GuardName
   check(
     ctx: DispatchContext,
-    caps: { minIntervalMs: number; dailyCap: number; maxConcurrent: number },
+    caps: { minIntervalMs: number; maxConcurrent: number },
   ): string | null
 }
 

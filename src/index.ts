@@ -243,7 +243,7 @@ export default Plugin.define({
                 const st = dispatcher.status()
                 if (st.state === "disabled") return "🤖 自动领取：关（网页看板右上角开关可开启）"
                 const label = { idle: "空闲", cooldown: `冷却中（剩 ${Math.round(st.cooldownRemainMs / 1000)}s）`, paused: "已暂停（连续失败）", disabled: "关" }[st.state]
-                return `🤖 自动领取：${label}（今日 ${st.todayCount}/${DISPATCH_CAPS.dailyCap} 次${st.failStreak > 0 ? `，连败 ${st.failStreak}` : ""}）`
+                return `🤖 自动领取：${label}（今日 ${st.todayCount} 次${st.failStreak > 0 ? `，连败 ${st.failStreak}` : ""}）`
               }
             : undefined,
         }),

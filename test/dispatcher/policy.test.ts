@@ -23,7 +23,7 @@ const base: DispatchContext = {
 }
 
 describe("守卫链", () => {
-  test("GUARDS 顺序钉死:primary→enabled→paused→empty→concurrency→cooldown→interval→cap", () => {
+  test("GUARDS 顺序钉死:primary→enabled→paused→empty→concurrency→cooldown→interval(cap 已移除)", () => {
     expect(GUARDS.map((g) => g.name)).toEqual([
       "secondary",
       "disabled",
@@ -32,7 +32,6 @@ describe("守卫链", () => {
       "concurrency-full",
       "cooldown",
       "interval",
-      "cap",
     ] satisfies GuardName[])
   })
 
@@ -49,7 +48,6 @@ describe("守卫链", () => {
     expect(shouldDispatch({ ...base, lastDispatchAgeMs: DISPATCH_CAPS.minIntervalMs - 1 }).reason).toBe(
       "interval",
     )
-    expect(shouldDispatch({ ...base, todayCount: DISPATCH_CAPS.dailyCap }).reason).toBe("cap")
   })
 
   test("插入自定义 guard 追加在链尾并被 shouldDispatch 执行;测试后恢复链原状", () => {
@@ -106,5 +104,12 @@ describe("退避曲线冒烟(全矩阵见 test/dispatcher.test.ts)", () => {
   test("countActive 只认 analyzing/executing(回归守护:claim 缺省也算)", () => {
     expect(countActive([{ status: "executing" }])).toBe(1)
     expect(countActive([{ status: "analysis_confirm" }])).toBe(0)
+  })
+})
+
+describe("日派发上限已移除(产品决策:派发不受日配额拒绝)", () => {
+  test("todayCount 超过旧上限(100)乃至任意大,仍放行", () => {
+    expect(shouldDispatch({ ...base, todayCount: 100 }).ok).toBe(true)
+    expect(shouldDispatch({ ...base, todayCount: 100_000 }).ok).toBe(true)
   })
 })

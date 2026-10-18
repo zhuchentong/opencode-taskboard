@@ -62,22 +62,21 @@ describe("shouldDispatch（派发条件矩阵）", () => {
     expect(shouldDispatch({ ...base, lastDispatchAgeMs: DISPATCH_CAPS.minIntervalMs }).ok).toBe(true)
   })
 
-  test("日计数达上限不派", () => {
-    expect(shouldDispatch({ ...base, todayCount: DISPATCH_CAPS.dailyCap }).reason).toBe("cap")
+  test("日派发上限已移除:todayCount 巨大仍放行(不再有 cap 拒绝)", () => {
+    expect(shouldDispatch({ ...base, todayCount: 100 }).ok).toBe(true)
+    expect(shouldDispatch({ ...base, todayCount: 100_000 }).ok).toBe(true)
   })
 
-  test("判定顺序：并发满先于冷却、间隔与日上限", () => {
+  test("判定顺序：并发满先于冷却与间隔", () => {
     const full = {
       ...base,
       activeCount: DISPATCH_CAPS.maxConcurrent,
       inCooldown: true,
       lastDispatchAgeMs: 0,
-      todayCount: DISPATCH_CAPS.dailyCap,
     }
     expect(shouldDispatch(full).reason).toBe("concurrency-full")
     expect(shouldDispatch({ ...full, activeCount: 0 }).reason).toBe("cooldown")
     expect(shouldDispatch({ ...full, activeCount: 0, inCooldown: false }).reason).toBe("interval")
-    expect(shouldDispatch({ ...full, activeCount: 0, inCooldown: false, lastDispatchAgeMs: null }).reason).toBe("cap")
   })
 
   test("并发上限可注入覆盖（接线/测试）", () => {
