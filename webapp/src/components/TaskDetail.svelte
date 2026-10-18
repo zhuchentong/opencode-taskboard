@@ -11,17 +11,21 @@
   import { ticker } from "$lib/ticker.svelte"
   import { confirmDialog } from "$lib/notify"
   import { formatTokens, totalTokens } from "$lib/usage"
-  import type { Task, TaskUsage } from "$lib/types"
+  import { badgeHue, normalizeProjectId } from "$lib/project-options"
+  import type { Project, Task, TaskUsage } from "$lib/types"
   import Markdown from "./Markdown.svelte"
 
   let {
     task,
+    projMap,
     onclose,
     onwrite,
     ondelete,
     initialReject,
   }: {
     task: Task
+    /** 项目索引表(详情头显示归属;缺省不显示) */
+    projMap?: Map<string, Project>
     onclose: () => void
     /** 统一写通道：onwrite(taskId, 乐观遮罩, API patch, 失败提示前缀) */
     onwrite: (taskId: string, mask: Partial<Task>, apiPatch: Record<string, unknown>, failMsg: string) => void
@@ -29,6 +33,8 @@
     /** 打开时直接展开打回表单（卡片快速打回入口） */
     initialReject?: boolean
   } = $props()
+
+  const proj = $derived(projMap?.get(normalizeProjectId(task)))
 
   let title = $state(task.title)
   let description = $state(task.description)
@@ -128,6 +134,12 @@
     onEscapeKeyDown={handleEscapeKey}
   >
     <Dialog.Header class="gap-1">
+      {#if proj}
+        <div class="flex w-fit items-center gap-1.5 text-xs text-muted-foreground" title={`工作区：${proj.workspace}`}>
+          <span class="size-1.5 rounded-full" style="background: hsl({badgeHue(proj.name)} 70% 50%)"></span>
+          项目:{proj.name}
+        </div>
+      {/if}
       <Badge variant="secondary" class="w-fit font-normal text-muted-foreground">{STATUS_LABELS[task.status]}</Badge>
       <Dialog.Title class="text-base wrap-anywhere">{task.title}</Dialog.Title>
       <Dialog.Description class="sr-only">{task.description || "任务详情"}</Dialog.Description>

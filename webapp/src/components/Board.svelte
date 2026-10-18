@@ -1,12 +1,13 @@
 <script lang="ts">
   import { STATUSES, STATUS_LABELS, groupByStatus } from "$lib/board"
-  import type { Task } from "$lib/types"
+  import type { Project, Task } from "$lib/types"
   import Lane from "./Lane.svelte"
 
   let {
     tasks,
     pendingIds,
     flashIds,
+    projMap,
     onopen,
     onconfirm,
     onquickreject,
@@ -15,6 +16,8 @@
     tasks: Task[]
     pendingIds: { has(id: string): boolean }
     flashIds: { has(id: string): boolean }
+    /** 项目索引表(卡片项目徽标) */
+    projMap: Map<string, Project>
     onopen: (task: Task) => void
     onconfirm?: (task: Task) => void
     onquickreject?: (task: Task) => void
@@ -37,6 +40,7 @@
       {onmove}
       {pendingIds}
       {flashIds}
+      {projMap}
     />
   {/each}
 </main>

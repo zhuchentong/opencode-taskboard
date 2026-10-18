@@ -5,7 +5,8 @@
   import { STATUS_LABELS, timeAgo } from "$lib/board"
   import { formatClock, formatDuration, formatPhaseLine, formatPhaseTooltip, queueWaitMs } from "$lib/duration"
   import { ticker } from "$lib/ticker.svelte"
-  import type { Task } from "$lib/types"
+  import { badgeHue, normalizeProjectId } from "$lib/project-options"
+  import type { Project, Task } from "$lib/types"
 
   let {
     task,
@@ -15,6 +16,7 @@
     pendingIds,
     flashIds,
     onmove,
+    projMap,
   }: {
     task: Task
     onopen: (task: Task) => void
@@ -26,6 +28,8 @@
     flashIds?: { has(id: string): boolean }
     /** 键盘跨泳道移动（方向 -1 上 / +1 下） */
     onmove?: (task: Task, dir: -1 | 1) => void
+    /** 项目索引表(项目徽标;缺省不显示) */
+    projMap?: Map<string, Project>
   } = $props()
 
   // Agent 认领中的分析/执行任务禁止用户拖拽/键盘移动（防误抢）
@@ -55,6 +59,8 @@
   }
   const dot = $derived(DOT_BY_STATUS[task.status] ?? "bg-muted-foreground/60")
   const band = $derived(BAND_BY_STATUS[task.status] ?? "border-l-transparent")
+  // 项目徽标:归属解析 + 确定性着色(缺 projMap 时不显示)
+  const proj = $derived(projMap?.get(normalizeProjectId(task)))
   // 两段计时：进行中的段随 ticker 逐秒递增；绝对时间走悬浮提示
   const phaseLine = $derived(formatPhaseLine(task, ticker.now))
   const phaseTitle = $derived(formatPhaseTooltip(task, ticker.now))
@@ -90,9 +96,19 @@
     }
   }}
 >
-  <Badge variant="outline" class="self-start gap-1.5 font-normal text-muted-foreground">
-    <span class="size-1.5 rounded-full {dot}"></span>{STATUS_LABELS[task.status]}
-  </Badge>
+  <div class="flex flex-wrap items-center gap-1">
+    <Badge variant="outline" class="gap-1.5 font-normal text-muted-foreground">
+      <span class="size-1.5 rounded-full {dot}"></span>{STATUS_LABELS[task.status]}
+    </Badge>
+    {#if proj}
+      <Badge
+        variant="outline"
+        class="gap-1.5 font-normal text-muted-foreground"
+        title={`所属项目：${proj.name}（工作区：${proj.workspace}）`}>
+        <span class="size-1.5 rounded-full" style="background: hsl({badgeHue(proj.name)} 70% 50%)"></span>{proj.name}
+      </Badge>
+    {/if}
+  </div>
   <!-- 固定尺寸：标题钳两行，不足两行也占位 -->
   <div class="line-clamp-2 min-h-10 font-semibold wrap-anywhere">{task.title}</div>
   <!-- 固定尺寸：仅时间类元信息，单行截断；悬浮提示含绝对时刻 -->

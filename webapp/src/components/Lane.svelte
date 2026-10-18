@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge"
   import { drag } from "$lib/drag.svelte"
-  import type { Status, Task } from "$lib/types"
+  import type { Project, Status, Task } from "$lib/types"
   import Card from "./Card.svelte"
 
   let {
@@ -15,6 +15,7 @@
     onmove,
     pendingIds,
     flashIds,
+    projMap,
   }: {
     status: Status
     label: string
@@ -26,6 +27,7 @@
     onmove?: (task: Task, dir: -1 | 1) => void
     pendingIds: { has(id: string): boolean }
     flashIds: { has(id: string): boolean }
+    projMap: Map<string, Project>
   } = $props()
 
   const isOver = $derived(drag.overStatus === status && drag.draggingId !== null)
@@ -65,7 +67,7 @@
       {#if dropIndex === i}
         <div class="drop-line w-[3px] flex-none self-stretch rounded-sm bg-primary" aria-hidden="true"></div>
       {/if}
-      <Card {task} {onopen} {onconfirm} {onquickreject} {pendingIds} {flashIds} {onmove} />
+      <Card {task} {onopen} {onconfirm} {onquickreject} {pendingIds} {flashIds} {onmove} {projMap} />
     {/each}
     {#if dropIndex === tasks.length}
       <div class="drop-line w-[3px] flex-none self-stretch rounded-sm bg-primary" aria-hidden="true"></div>

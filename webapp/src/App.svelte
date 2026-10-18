@@ -5,6 +5,7 @@
   import { fetchBoard, fetchModels, createTask, putSettings, patchTask, deleteTask, BoardApiError, type ConnState } from "./lib/api"
   import { applySnapshot, beginOptimistic, emptyState, settle, visibleTasks, type BoardState } from "./lib/optimistic"
   import { STATUSES } from "./lib/board"
+  import { normalizeProjectId, projectFilterOptions, projectMap } from "./lib/project-options"
   import { notify } from "./lib/notify"
   import { initDrag } from "./lib/drag.svelte"
   import { needsTicker } from "./lib/duration"
@@ -31,8 +32,13 @@
   let models = $state<string[]>([])
   let detailId = $state<string | null>(null)
   let detailInitialReject = $state(false)
+  /** 项目筛选(空串=全部);仅前端本地视图状态 */
+  let projectFilter = $state("")
 
   const visible = $derived(visibleTasks(board))
+  const projMap = $derived(projectMap(board.projects))
+  const filteredVisible = $derived(projectFilter ? visible.filter((t) => normalizeProjectId(t) === projectFilter) : visible)
+  const filterOptions = $derived(projectFilterOptions(board.projects, visible))
   const detailTask = $derived(detailId ? (visible.find((t) => t.id === detailId) ?? null) : null)
   // 乐观写入的视觉态：在途（半透明+pulse）与失败回滚（红闪一拍）
   let flashIds = $state<Set<string>>(new Set())
@@ -126,7 +132,7 @@
   async function refresh() {
     try {
       const snap = await fetchBoard()
-      board = applySnapshot(board, snap.tasks, snap.settings)
+      board = applySnapshot(board, snap.tasks, snap.settings, snap.projects)
       loaded = true
     } catch {
       /* 轮询失败保留现状，下轮重试 */
@@ -137,8 +143,8 @@
     const unsub = themeMode.subscribe((m) => (mode = m))
     const uninitDrag = initDrag(handleDrop)
     const disposeEvents = connectEvents({
-      onSnapshot: (tasks, settings) => {
-        board = applySnapshot(board, tasks, settings)
+      onSnapshot: (tasks, settings, projects) => {
+        board = applySnapshot(board, tasks, settings, projects)
         loaded = true
       },
       onStatus: (s) => (conn = s),
@@ -167,9 +173,9 @@
     writeTask(taskId, { status: toStatus }, { status: toStatus }, "移动失败")
   }
 
-  function handleCreate(title: string, description: string): Promise<void> {
+  function handleCreate(title: string, description: string, projectId: string): Promise<void> {
     // 成功返回 resolve（弹窗关闭清空）；失败 reject（弹窗保留输入），错误提示走 toast
-    return createTask(title, description || undefined)
+    return createTask(title, description || undefined, projectId || undefined)
       .then((t) => {
         refresh()
         notify("success", `任务已创建（${t.id}）`)
@@ -206,6 +212,11 @@
     {mode}
     modeLabel={MODE_LABEL[mode]}
     {models}
+    projects={board.projects}
+    {filterOptions}
+    {projectFilter}
+    onfilter={(id) => (projectFilter = id)}
+    onprojectschanged={refresh}
     oncreate={handleCreate}
     ontoggle={handleToggle}
     ondispatch={(autoDispatch: boolean) => void changeSettings({ autoDispatch })}
@@ -215,9 +226,10 @@
 
   {#if loaded}
     <Board
-      tasks={visible}
+      tasks={filteredVisible}
       pendingIds={board.pending}
       flashIds={flashIds}
+      {projMap}
       onopen={openDetail}
       onconfirm={quickConfirm}
       onquickreject={quickReject}
@@ -241,6 +253,7 @@
 {#if detailTask}
   <TaskDetail
     task={detailTask}
+    {projMap}
     onclose={closeDetail}
     onwrite={writeTask}
     ondelete={removeTask}

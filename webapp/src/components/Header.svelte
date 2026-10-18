@@ -6,10 +6,12 @@
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu"
   import { Switch } from "$lib/components/ui/switch"
   import type { ConnState } from "$lib/api"
-  import type { BoardSettings } from "$lib/types"
+  import { DEFAULT_PROJECT_ID, type BoardSettings, type Project } from "$lib/types"
   import type { ThemeMode } from "../theme"
   import { MODEL_PLACEHOLDER, groupModels } from "$lib/model-options"
+  import { projectFilterOptions } from "$lib/project-options"
   import StatusDot from "./StatusDot.svelte"
+  import ProjectsDialog from "./ProjectsDialog.svelte"
 
   let {
     settings,
@@ -17,6 +19,11 @@
     mode,
     modeLabel,
     models,
+    projects,
+    filterOptions,
+    projectFilter,
+    onfilter,
+    onprojectschanged,
     oncreate,
     ontoggle,
     ondispatch,
@@ -29,8 +36,17 @@
     modeLabel: string
     /** 可用模型清单("provider/model" 行;/api/models 不可用时为空 → 下拉只留默认项+提示) */
     models: string[]
+    /** 项目清单(快照事实源;建任务下拉与项目管理弹窗共用) */
+    projects: Project[]
+    /** 筛选下拉选项(App 经 projectFilterOptions 纯函数算好,含未完结计数) */
+    filterOptions: { id: string; label: string; count: number }[]
+    /** 项目筛选(空串=全部) */
+    projectFilter: string
+    onfilter: (id: string) => void
+    /** 项目管理弹窗内任何变更后回调(App.refresh 拉新快照) */
+    onprojectschanged: () => void
     /** 返回 Promise：成功后弹窗关闭并清空；失败（Promise reject）保留输入与弹窗，错误提示由 App 的 toast 负责 */
-    oncreate: (title: string, description: string) => Promise<void>
+    oncreate: (title: string, description: string, projectId: string) => Promise<void>
     ontoggle: (requireAnalysisConfirm: boolean) => void
     ondispatch: (autoDispatch: boolean) => void
     /** 阶段模型变更(phase 为设置字段名;空串=跟随 opencode 默认) */
@@ -42,8 +58,10 @@
   let open = $state(false)
   let title = $state("")
   let description = $state("")
+  let projectSel = $state(DEFAULT_PROJECT_ID)
   const canSubmit = $derived(title.trim().length > 0)
   let submitting = $state(false)
+  let projectsOpen = $state(false)
 
   // 阶段模型下拉:受控值镜像(settings 是 props 不可 bind);选项异步就绪后重申当前值,
   // 防浏览器在 value 不在 option 列表时静默回落到首项
@@ -59,6 +77,7 @@
   function openCreate() {
     title = ""
     description = ""
+    projectSel = DEFAULT_PROJECT_ID
     open = true
   }
 
@@ -67,7 +86,7 @@
     if (!canSubmit || submitting) return
     submitting = true
     try {
-      await oncreate(title.trim(), description.trim())
+      await oncreate(title.trim(), description.trim(), projectSel)
       open = false
     } catch {
       /* 失败：App 已 toast，保留弹窗与输入供修正 */
@@ -87,6 +106,21 @@
   <div class="flex min-w-0 items-center gap-3">
     <h1 class="whitespace-nowrap text-base font-semibold">任务看板</h1>
     <Button size="sm" onclick={openCreate}>＋ 新建任务</Button>
+    <label
+      class="inline-flex items-center gap-2 rounded-lg border border-border bg-card/40 px-3 py-1.5 whitespace-nowrap"
+      title="按所属项目筛选看板卡片">
+      <span class="text-[13px] font-medium">项目</span>
+      <select
+        value={projectFilter}
+        onchange={(e) => onfilter((e.currentTarget as HTMLSelectElement).value)}
+        class="max-w-40 rounded-md border border-border bg-background px-1.5 py-1 text-[12px] text-foreground outline-none focus:ring-1 focus:ring-ring"
+        aria-label="按项目筛选">
+        {#each filterOptions as opt (opt.id)}
+          <option value={opt.id}>{opt.label}（{opt.count}）</option>
+        {/each}
+      </select>
+    </label>
+    <Button size="sm" variant="outline" onclick={() => (projectsOpen = true)} title="管理项目与工作区">管理项目</Button>
   </div>
   <span class="flex-1"></span>
   <div class="flex flex-wrap items-center justify-end gap-2">
@@ -189,6 +223,17 @@
     <form class="grid gap-2.5" onsubmit={submit}>
       <Input bind:value={title} placeholder="标题（必填）" aria-label="新任务标题" required />
       <Textarea bind:value={description} placeholder="描述（可选）" aria-label="任务描述" rows="3"></Textarea>
+      <label class="grid gap-1">
+        <span class="text-[12px] font-medium text-muted-foreground">所属项目（worker 将在项目工作区运行）</span>
+        <select
+          bind:value={projectSel}
+          class="rounded-md border border-border bg-background px-2 py-1.5 text-[13px] text-foreground outline-none focus:ring-1 focus:ring-ring"
+          aria-label="所属项目">
+          {#each projects as p (p.id)}
+            <option value={p.id}>{p.name}</option>
+          {/each}
+        </select>
+      </label>
       <Dialog.Footer class="gap-2">
         <Button type="button" variant="ghost" onclick={() => (open = false)}>取消</Button>
         <Button type="submit" disabled={!canSubmit || submitting}>
@@ -198,3 +243,5 @@
     </form>
   </Dialog.Content>
 </Dialog.Root>
+
+<ProjectsDialog bind:open={projectsOpen} {projects} onchanged={onprojectschanged} />
