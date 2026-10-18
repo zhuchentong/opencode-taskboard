@@ -9,11 +9,15 @@
  * 并发场景下 worker 不再自己去「找一个待领取任务」,避免多个 worker 抢同一批任务、
  * 以及 pending 少于并发数时出现无任务可领的空派。
  */
-export function buildDispatchPrompt(task: { id: string; title: string }): string {
+export function buildDispatchPrompt(
+  task: { id: string; title: string },
+  project?: { name: string; workspace: string },
+): string {
   return [
     `【自动派发】这是看板插件的后台自动任务,本次只处理这一个任务:`,
     `  任务 ID:${task.id}`,
     `  任务标题:${task.title}`,
+    ...(project ? [`  所属项目:${project.name}（工作区:${project.workspace}）`] : []),
     "",
     "领取前请先读任务描述,如实评估它的复杂度与真实工作量,再动手:任务可能是简单修改,也可能是需要完整设计、实现与验证的复杂工作,请按任务本身的需要自行选择合适的工作流与做法,不要预设流程。",
     "",

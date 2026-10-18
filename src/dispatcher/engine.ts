@@ -15,7 +15,7 @@
  */
 
 import type { Store } from "../store"
-import { StoreError } from "../types"
+import { DEFAULT_PROJECT_ID, StoreError } from "../types"
 import type { Task } from "../types"
 import { makeBuiltinRules, runAdvance } from "./advance"
 import { resolvePhaseModel, type CreateModelRef } from "./model"
@@ -251,7 +251,22 @@ export function initDispatcher(
   const dispatchFrontier = async (task: Task): Promise<void> => {
     if (disposed) return // 排空循环卡在 await 期间卸载:不再新建会话(终审 M-3)
     const workerName = `w${++workerSeq}`
-    const result = await pool.dispatch(task, workerName, buildDispatchPrompt(task), phaseModels.analyze)
+    // 任务→项目→工作区:worker 会话落在所属项目的工作区(跨仓库派发)。
+    // 默认项目 = 不指定(pool 回退 deps.directory,提示词省项目行);
+    // 项目查询失败(键残留/外部改动,理论不可达——活跃任务禁删项目)→ 双保险回退 + 警示。
+    let directory: string | undefined
+    let project: { name: string; workspace: string } | undefined
+    const pid = task.projectId ?? DEFAULT_PROJECT_ID
+    if (pid !== DEFAULT_PROJECT_ID) {
+      try {
+        const p = await deps.store.getProject(pid)
+        directory = p.workspace
+        project = { name: p.name, workspace: p.workspace }
+      } catch {
+        deps.log(`项目查询失败,回退服务目录 task=${task.id} projectId=${pid}（回退）`)
+      }
+    }
+    const result = await pool.dispatch(task, workerName, buildDispatchPrompt(task, project), phaseModels.analyze, directory)
     if (result === "ok") {
       lastDispatchAt = Date.now()
       todayCount++

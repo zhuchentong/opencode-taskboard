@@ -107,6 +107,17 @@ describe("session-pool(在途表 + taskID 结算 + 统一清理)", () => {
     h.pool.dispose()
   })
 
+  test("dispatch 第5参 directory 优先于 deps.directory;缺省回退 deps.directory", async () => {
+    const h = harness({}, 5_000)
+    const t1 = await toPending(h.store, "自定义目录")
+    await h.pool.dispatch(t1, "w1", `派发提示词:${t1.title}`, undefined, "/custom-workspace")
+    expect(h.session.created[0].directory).toBe("/custom-workspace")
+    const t2 = await toPending(h.store, "缺省目录")
+    await h.pool.dispatch(t2, "w2", `派发提示词:${t2.title}`)
+    expect(h.session.created[1].directory).toBe("/proj")
+    h.pool.dispose()
+  })
+
   test("超时回收:任务退回待领取、会话回收、onTimeout 通知 engine 记任务级退避", async () => {
     const h = harness({}, 20)
     const task = await toPending(h.store, "没人领")

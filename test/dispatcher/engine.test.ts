@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { initDispatcher } from "../../src/dispatcher/engine"
+import { buildDispatchPrompt } from "../../src/dispatcher/prompt"
 import type { DispatcherSession } from "../../src/dispatcher/types"
 import { createStore, memoryBackend, type Store } from "../../src/store"
-import type { Task } from "../../src/types"
+import { DEFAULT_PROJECT_ID, type Task } from "../../src/types"
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -462,4 +463,87 @@ describe("engine 装配(沿驱动 initDispatcher)", () => {
     expect(h.d.status().lastSkipReason).toBe("cooldown")
     h.d.dispose()
   }, 4000)
+})
+
+describe("buildDispatchPrompt 项目行", () => {
+  test("带 project 输出所属项目行;缺省省略该行", () => {
+    const base = buildDispatchPrompt({ id: "task_1", title: "T" })
+    expect(base).not.toContain("所属项目")
+    const withP = buildDispatchPrompt({ id: "task_1", title: "T" }, { name: "网关", workspace: "/p1" })
+    expect(withP).toContain("所属项目:网关（工作区:/p1）")
+  })
+})
+
+describe("派发工作区解析", () => {
+  test("任务归属项目 P → worker 会话建在 P.workspace,提示词带项目行", async () => {
+    const h = harness({ claimWaitMs: 5_000 })
+    const p = await h.store.createProject({ name: "网关", workspace: "/p1-workspace" })
+    const t = await toPending(h.store, "项目任务")
+    await h.store.patch(t.id, { projectId: p.id })
+    await h.store.setSettings({ autoDispatch: true })
+    await h.fire()
+    await sleep(80)
+    expect(h.session.created[0].directory).toBe("/p1-workspace")
+    expect(h.session.prompts[0].text).toContain("所属项目:网关（工作区:/p1-workspace）")
+    h.d.dispose()
+  })
+
+  test("任务归属默认项目 → 会话建在 ctx.directory,提示词省项目行", async () => {
+    const h = harness({ claimWaitMs: 5_000 })
+    await toPending(h.store, "默认项目任务")
+    await h.store.setSettings({ autoDispatch: true })
+    await h.fire()
+    await sleep(80)
+    expect(h.session.created[0].directory).toBe("/proj")
+    expect(h.session.prompts[0].text).not.toContain("所属项目")
+    h.d.dispose()
+  })
+
+  test("projectId 指向不存在项目 → 回退 ctx.directory 且日志含警示", async () => {
+    const backend = memoryBackend()
+    const store = createStore(backend, { requireAnalysisConfirm: false, directory: "/proj" })
+    const entries: Record<string, unknown> = {}
+    const created: { directory?: string }[] = []
+    const lines: string[] = []
+    let registered: ((tasks?: Task[]) => void) | null = null
+    let seq = 0
+    const session = {
+      create: async (input?: { title?: string; location?: { directory: string } }) => {
+        const id = `ses_w${++seq}`
+        created.push({ directory: input?.location?.directory })
+        return { id }
+      },
+      get: async () => ({}),
+      prompt: async () => ({}),
+      remove: async () => ({}),
+    } satisfies DispatcherSession
+    const d = initDispatcher(
+      {
+        session,
+        storage: { get: async (k) => entries[k], set: async (k, v) => { entries[k] = v } },
+        projectID: "p1",
+        directory: "/proj",
+      },
+      {
+        store,
+        log: (m) => lines.push(m),
+        onWrite: (fn) => (registered = fn),
+        evaluateMs: 10,
+        claimWaitMs: 5_000,
+        minIntervalMs: 0,
+        usagePollMs: 0,
+        evaluateTickMs: 0,
+      },
+    )
+    const t = await toPending(store, "幽灵项目任务")
+    // 手工把归属指向已消失的项目(模拟存储键残留/外部改动——绕过 store 校验直接写 KV)
+    const raw = (await backend.get(`task/${t.id}`)) as Task
+    await backend.set(`task/${t.id}`, { ...raw, projectId: "project_ghost" })
+    await store.setSettings({ autoDispatch: true })
+    await registered?.()
+    await sleep(80)
+    expect(created[0].directory).toBe("/proj")
+    expect(lines.some((m) => m.includes("project_ghost") && m.includes("回退"))).toBe(true)
+    d.dispose()
+  })
 })

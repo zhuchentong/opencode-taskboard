@@ -114,7 +114,13 @@ export function createSessionPool(deps: SessionPoolDeps) {
      * 会话默认模型与首回合模型一致;缺省用 opencode 默认解析。
      * 返回结果供 engine 记对应连败口径。
      */
-    async dispatch(task: Task, workerName: string, text: string, model?: { providerID: string; id: string }): Promise<DispatchOutcome> {
+    async dispatch(
+      task: Task,
+      workerName: string,
+      text: string,
+      model?: { providerID: string; id: string },
+      directory?: string,
+    ): Promise<DispatchOutcome> {
       if (disposed) {
         deps.log(`派发器已卸载,跳过派发 task=${task.id}`)
         return "create-fail"
@@ -123,7 +129,8 @@ export function createSessionPool(deps: SessionPoolDeps) {
       try {
         const info = await deps.session.create({
           title: `看板:${task.title}`,
-          location: { directory: deps.directory },
+          // 工作区:任务所属项目优先(跨仓库派发);缺省回退服务目录
+          location: { directory: directory ?? deps.directory },
           // 实验:显式指定 model——诊断发现无 model 的会话创建即被 opencode 挂起
           // (time_suspended=创建时刻,回合永不启动);正常会话有模型。
           ...(model ? { model } : {}),
