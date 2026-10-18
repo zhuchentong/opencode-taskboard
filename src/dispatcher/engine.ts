@@ -376,8 +376,12 @@ export function initDispatcher(
   }
 
   // 环境自举:启动后自动评估一次,处理存量待领取任务(无需外部写事件触发)。
+  // 仅在存在待领取任务时才评估,避免空看板启动时记录"empty"跳过并污染 lastSkipReason。
   // evaluate 内部已 await loaded,沿状态就绪后才会真正执行派发决策。
-  void evaluate()
+  void (async () => {
+    const startupPending = (await deps.store.list()).some((t) => t.status === "pending")
+    if (startupPending) void evaluate()
+  })()
 
   const trigger = createTrigger({
     evaluate,
