@@ -174,4 +174,24 @@ describe("乐观更新协议状态机", () => {
     expect(s3).not.toBe(s2)
     expect(s4).not.toBe(s3)
   })
+
+  describe("projects 维度", () => {
+    const proj = { id: "project_a", name: "A", workspace: "/a", createdAt: 1, updatedAt: 1 }
+
+    test("emptyState 携带空项目清单;applySnapshot 第四参落 state.projects", () => {
+      let state = emptyState(settings)
+      expect(state.projects).toEqual([])
+      state = applySnapshot(state, [makeTask()], settings, [proj])
+      expect(state.projects).toEqual([proj])
+      // 再次快照更新 projects(替换,非合并)
+      state = applySnapshot(state, [makeTask()], settings, [])
+      expect(state.projects).toEqual([])
+    })
+
+    test("applySnapshot 缺第四参时保留现有 projects(向后兼容旧调用方)", () => {
+      let state = emptyState(settings, [proj])
+      state = applySnapshot(state, [makeTask()], settings)
+      expect(state.projects).toEqual([proj])
+    })
+  })
 })

@@ -52,6 +52,19 @@ export interface SpanRecord {
   usage?: TaskUsage
 }
 
+export const DEFAULT_PROJECT_ID = "project_default"
+
+/** 看板「项目」(与 src/types.ts 保持一致);默认项目为服务端合成实体,builtin=true */
+export interface Project {
+  id: string
+  name: string
+  workspace: string
+  description?: string
+  builtin?: boolean
+  createdAt: number
+  updatedAt: number
+}
+
 export interface Task {
   id: string
   title: string
@@ -71,6 +84,8 @@ export interface Task {
   spanLog?: SpanRecord[]
   /** 轮次 = 进 pending 的次数（首轮 1；打回重做递增，问答往复不计入） */
   round?: number
+  /** 所属看板项目;缺省(老任务)按默认项目归一 */
+  projectId?: string
   createdAt: number
   updatedAt: number
 }

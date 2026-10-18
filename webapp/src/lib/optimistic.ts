@@ -1,24 +1,32 @@
-import type { BoardSettings, Task } from "./types"
+import type { BoardSettings, Project, Task } from "./types"
 
 // 乐观更新协议状态机：server 快照为唯一事实源，pending 为字段级在途遮罩。
 // 全部函数不可变更新——返回新对象，不改入参；组件侧以 $derived 消费 visibleTasks。
 export type BoardState = {
   server: Task[] // 最近一次服务器快照（唯一事实源）
   settings: BoardSettings
+  projects: Project[] // 项目清单（同属快照事实源）
   pending: Map<string, Partial<Task>> // taskId → 在途遮罩
 }
 
-export function emptyState(settings: BoardSettings): BoardState {
-  return { server: [], settings, pending: new Map() }
+export function emptyState(settings: BoardSettings, projects: Project[] = []): BoardState {
+  return { server: [], settings, projects, pending: new Map() }
 }
 
-// 快照一律先落 server 与 settings；在途遮罩原样保留（在途写期间不被回流覆盖）
+// 快照一律先落 server 与 settings；在途遮罩原样保留（在途写期间不被回流覆盖）。
+// projects 缺省时保留现有清单（旧调用方兼容；真实链路总是随快照携带）。
 export function applySnapshot(
   state: BoardState,
   tasks: Task[],
   settings: BoardSettings,
+  projects?: Project[],
 ): BoardState {
-  return { server: [...tasks], settings, pending: new Map(state.pending) }
+  return {
+    server: [...tasks],
+    settings,
+    projects: projects ?? state.projects,
+    pending: new Map(state.pending),
+  }
 }
 
 // 本地写开始：字段级合并遮罩，同任务连续乐观写时后者字段覆盖前者

@@ -1,6 +1,6 @@
 // 全前端唯一 API 入口：统一 token 头、JSON 体与错误解析。
 // 非 2xx 一律抛 BoardApiError（code 取服务端 error.code，缺省 "unknown"）。
-import type { BoardSettings, Task } from "./types"
+import type { BoardSettings, Project, Task } from "./types"
 
 declare global {
   interface Window {
@@ -42,12 +42,37 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
-export async function fetchBoard(): Promise<{ tasks: Task[]; settings: BoardSettings }> {
-  const [tasks, settings] = await Promise.all([
+export async function fetchBoard(): Promise<{
+  tasks: Task[]
+  settings: BoardSettings
+  projects: Project[]
+}> {
+  // projects 拉取失败(旧服务端无此路由)按空清单容错,不拖垮整帧
+  const [tasks, settings, projects] = await Promise.all([
     request<Task[]>("/api/tasks"),
     request<BoardSettings>("/api/settings"),
+    request<{ projects: Project[] }>("/api/projects")
+      .then((r) => r.projects)
+      .catch(() => [] as Project[]),
   ])
-  return { tasks, settings }
+  return { tasks, settings, projects }
+}
+
+export async function fetchProjects(): Promise<Project[]> {
+  const r = await request<{ projects: Project[] }>("/api/projects")
+  return r.projects
+}
+
+export function createProject(input: { name: string; workspace: string; description?: string }): Promise<Project> {
+  return request<Project>("/api/projects", { method: "POST", body: JSON.stringify(input) })
+}
+
+export function updateProject(id: string, patch: { name?: string; workspace?: string; description?: string }): Promise<Project> {
+  return request<Project>(`/api/projects/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) })
+}
+
+export function deleteProject(id: string): Promise<void> {
+  return request<void>(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" })
 }
 
 /** 可用模型清单(worker 阶段模型下拉数据源);服务端不可用时返回空,组件退化提示 */
@@ -56,8 +81,8 @@ export async function fetchModels(): Promise<string[]> {
   return r.models
 }
 
-export function createTask(title: string, description?: string): Promise<Task> {
-  return request<Task>("/api/tasks", { method: "POST", body: JSON.stringify({ title, description }) })
+export function createTask(title: string, description?: string, projectId?: string): Promise<Task> {
+  return request<Task>("/api/tasks", { method: "POST", body: JSON.stringify({ title, description, projectId }) })
 }
 
 export function patchTask(id: string, patch: Record<string, unknown>): Promise<Task> {

@@ -61,7 +61,7 @@ function fakeTimers() {
   }
 }
 
-function fakeFetch(samples: { tasks: Task[]; settings: BoardSettings }[]) {
+function fakeFetch(samples: { tasks: Task[]; settings: BoardSettings; projects?: { id: string; name: string }[] }[]) {
   let i = 0
   const calls = () => i
   const fn = () => Promise.resolve(samples[Math.min(i++, samples.length - 1)])
@@ -69,13 +69,14 @@ function fakeFetch(samples: { tasks: Task[]; settings: BoardSettings }[]) {
 }
 
 function baseHandlers() {
-  const snap: { tasks: Task[]; settings: BoardSettings }[] = []
+  const snap: { tasks: Task[]; settings: BoardSettings; projects: unknown[] }[] = []
   const states: string[] = []
   return {
     snap,
     states,
     handlers: {
-      onSnapshot: (tasks: Task[], settings: BoardSettings) => snap.push({ tasks, settings }),
+      onSnapshot: (tasks: Task[], settings: BoardSettings, projects?: unknown[]) =>
+        snap.push({ tasks, settings, projects: projects ?? "missing" }),
       onStatus: (s: string) => states.push(s),
     },
   }
@@ -91,10 +92,22 @@ describe("connectEvents", () => {
     expect(es.url).toBe("/api/events")
     es.open()
     expect(states).toEqual(["live"])
-    es.message({ type: "snapshot", tasks: [T("a")], settings: { requireAnalysisConfirm: true, autoDispatch: false } })
+    const proj = { id: "project_a", name: "A" }
+    es.message({ type: "snapshot", tasks: [T("a")], settings: { requireAnalysisConfirm: true, autoDispatch: false }, projects: [proj] })
     expect(snap).toHaveLength(1)
     expect(snap[0].tasks[0].id).toBe("a")
     expect(snap[0].settings.requireAnalysisConfirm).toBe(true)
+    expect(snap[0].projects).toEqual([proj])
+  })
+
+  test("快照缺 projects 字段(旧服务端容错)→ onSnapshot 收到空数组", () => {
+    FakeES.instances = []
+    const { handlers, snap } = baseHandlers()
+    const timers = fakeTimers()
+    connectEvents(handlers, { EventSource: FakeES as never, setInterval: timers.set, clearInterval: timers.clear, setTimeout: timers.set, clearTimeout: timers.clear, fetchBoard: fakeFetch([]).fn })
+    FakeES.instances[0].message({ type: "snapshot", tasks: [T("a")], settings: { requireAnalysisConfirm: false, autoDispatch: false } })
+    expect(snap).toHaveLength(1)
+    expect(snap[0].projects).toEqual([])
   })
 
   test("连续 3 次 error → 降级 polling 并启动 5s 轮询；重连 open → 回 live 且轮询停止", async () => {

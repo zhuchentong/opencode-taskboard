@@ -1,6 +1,6 @@
 import type { ConnState } from "./api"
 import { fetchBoard } from "./api"
-import type { BoardSettings, Task } from "./types"
+import type { BoardSettings, Project, Task } from "./types"
 
 /**
  * SSE 订阅 + 轮询兜底。
@@ -19,7 +19,7 @@ export interface EventsDeps {
   clearInterval(handle: unknown): void
   setTimeout(fn: () => void, ms: number): unknown
   clearTimeout(handle: unknown): void
-  fetchBoard(): Promise<{ tasks: Task[]; settings: BoardSettings }>
+  fetchBoard(): Promise<{ tasks: Task[]; settings: BoardSettings; projects: Project[] }>
 }
 
 // 宿主方法（setInterval 等）要求 this 为 globalThis：作为 deps 对象的属性被调用时
@@ -39,7 +39,7 @@ const FAILURE_THRESHOLD = 3
 
 export function connectEvents(
   handlers: {
-    onSnapshot(tasks: Task[], settings: BoardSettings): void
+    onSnapshot(tasks: Task[], settings: BoardSettings, projects: Project[]): void
     onStatus(s: ConnState): void
   },
   deps: EventsDeps = realDeps,
@@ -53,7 +53,7 @@ export function connectEvents(
   const pull = async () => {
     try {
       const snap = await deps.fetchBoard()
-      handlers.onSnapshot(snap.tasks, snap.settings)
+      handlers.onSnapshot(snap.tasks, snap.settings, snap.projects)
     } catch {
       /* 拉取失败保留下次重试 */
     }
@@ -86,9 +86,15 @@ export function connectEvents(
 
   es.onmessage = (e) => {
     try {
-      const evt = JSON.parse(e.data) as { type: string; tasks?: Task[]; settings?: BoardSettings }
+      const evt = JSON.parse(e.data) as {
+        type: string
+        tasks?: Task[]
+        settings?: BoardSettings
+        projects?: Project[]
+      }
       if (evt.type === "snapshot" && evt.tasks && evt.settings) {
-        handlers.onSnapshot(evt.tasks, evt.settings)
+        // projects 缺省(旧服务端)按空清单容错
+        handlers.onSnapshot(evt.tasks, evt.settings, evt.projects ?? [])
       }
     } catch {
       /* 非 JSON 帧（心跳注释不会进 onmessage）忽略 */
