@@ -71,16 +71,34 @@
     <Button size="sm" onclick={openCreate}>＋ 新建任务</Button>
   </div>
   <span class="flex-1"></span>
-  <div class="flex flex-wrap items-center justify-end gap-3">
-    <label class="inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-[13px] text-muted-foreground"
+  <div class="flex flex-wrap items-center justify-end gap-2">
+    <label
+      class="inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 whitespace-nowrap transition-all
+        {settings.requireAnalysisConfirm
+          ? 'border-emerald-500/40 bg-emerald-500/10'
+          : 'border-border bg-card/40 opacity-60'}"
       title="开启后，Agent 提交分析将停在「分析确认」泳道等待放行">
       <Switch checked={settings.requireAnalysisConfirm} onCheckedChange={(v) => ontoggle(v)} aria-label="分析需人工确认" />
-      分析需人工确认
+      <span class="text-[13px] font-medium">分析需人工确认</span>
+      <span
+        class="text-[12px] font-bold {settings.requireAnalysisConfirm ? 'text-emerald-400' : 'text-zinc-500'}"
+        aria-hidden="true">
+        {settings.requireAnalysisConfirm ? "已开启" : "已关闭"}
+      </span>
     </label>
-    <label class="inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-[13px] text-muted-foreground"
-      title="开启后，待领取出现任务时插件会自动驱动一个 Agent 会话领取并处理（一次一个）">
+    <label
+      class="inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 whitespace-nowrap transition-all
+        {settings.autoDispatch
+          ? 'border-emerald-500/40 bg-emerald-500/10'
+          : 'border-border bg-card/40 opacity-60'}"
+      title="开启后，待领取出现任务时插件会自动驱动一个 Agent 会话领取并处理">
       <Switch checked={settings.autoDispatch} onCheckedChange={(v) => ondispatch(v)} aria-label="自动领取" />
-      自动领取
+      <span class="text-[13px] font-medium">自动领取</span>
+      <span
+        class="text-[12px] font-bold {settings.autoDispatch ? 'text-emerald-400' : 'text-zinc-500'}"
+        aria-hidden="true">
+        {settings.autoDispatch ? "已开启" : "已关闭"}
+      </span>
     </label>
     <StatusDot state={conn} />
     <DropdownMenu.Root>
