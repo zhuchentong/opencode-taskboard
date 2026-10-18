@@ -12,11 +12,11 @@ async function toPending(s: Store, title: string): Promise<Task> {
 }
 
 function fakeSession(overrides: Partial<DispatcherSession> = {}): DispatcherSession & {
-  created: { id: string; title?: string; directory?: string }[]
+  created: { id: string; title?: string; directory?: string; model?: { providerID: string; id: string } }[]
   prompts: { sessionID: string; text: string }[]
   removed: string[]
 } {
-  const created: { id: string; title?: string; directory?: string }[] = []
+  const created: { id: string; title?: string; directory?: string; model?: { providerID: string; id: string } }[] = []
   const prompts: { sessionID: string; text: string }[] = []
   const removed: string[] = []
   let seq = 0
@@ -27,7 +27,7 @@ function fakeSession(overrides: Partial<DispatcherSession> = {}): DispatcherSess
     create: async (input) => {
       if (overrides.create) return overrides.create(input)
       const id = `ses_w${++seq}`
-      created.push({ id, title: input?.title, directory: input?.location?.directory })
+      created.push({ id, title: input?.title, directory: input?.location?.directory, model: input?.model })
       return { id, title: input?.title }
     },
     get: async (input) => ({ id: input.sessionID }),
@@ -44,7 +44,11 @@ function fakeSession(overrides: Partial<DispatcherSession> = {}): DispatcherSess
   }
 }
 
-function harness(overrides: Partial<DispatcherSession> = {}, claimWaitMs = 20) {
+function harness(
+  overrides: Partial<DispatcherSession> = {},
+  claimWaitMs = 20,
+  model?: { providerID: string; id: string },
+) {
   const store = createStore(memoryBackend(), { requireAnalysisConfirm: false })
   const lines: string[] = []
   const settled: string[] = []
@@ -55,6 +59,7 @@ function harness(overrides: Partial<DispatcherSession> = {}, claimWaitMs = 20) {
   const pool = createSessionPool({
     session,
     directory: "/proj",
+    model,
     claimWaitMs,
     patchTask: async (id, patch) => {
       // 契约(见账本 Task 4 裁决):仅当任务仍在 pending 时撤回;否则视为已被领取
@@ -86,6 +91,18 @@ describe("session-pool(在途表 + taskID 结算 + 统一清理)", () => {
     expect(h.pool.inFlightCount()).toBe(1)
     expect(h.pool.inFlightTaskIDs()).toEqual(new Set([task.id]))
     expect(h.lines.some((l) => l.includes("派发 →"))).toBe(true)
+    h.pool.dispose()
+  })
+
+  test("派发:显式指定 model 时,建会话输入携带 model 字段(TASKBOARD_MODEL 生效)", async () => {
+    const h = harness({}, 5_000, { providerID: "opencode", id: "nemotron-3.5-super-vl-free" })
+    const task = await toPending(h.store, "带模型派发")
+    const result = await h.pool.dispatch(task, "w1", `派发提示词:${task.title}`)
+    expect(result).toBe("ok")
+    expect(h.session.created[0].model).toEqual({
+      providerID: "opencode",
+      id: "nemotron-3.5-super-vl-free",
+    })
     h.pool.dispose()
   })
 
@@ -200,5 +217,51 @@ describe("session-pool(在途表 + taskID 结算 + 统一清理)", () => {
     await sleep(60)
     expect(h.timeouts).toEqual([])
     expect(h.session.removed).toEqual([])
+  })
+
+  describe("TASKBOARD_MODEL 生效:worker 会话显式指定模型", () => {
+    const model = { providerID: "openai", id: "gpt-5" }
+
+    test("配置 model 后,session.create 收到 model: { providerID, id };建会话带项目目录与标题", async () => {
+      const h = harness({}, 5_000, model)
+      const task = await toPending(h.store, "写个功能")
+      const result = await h.pool.dispatch(task, "w1", `派发提示词:${task.title}`)
+      expect(result).toBe("ok")
+      expect(h.session.created).toHaveLength(1)
+      expect(h.session.created[0].directory).toBe("/proj")
+      expect(h.session.created[0].title).toContain("写个功能")
+      expect(h.session.created[0].model).toEqual(model)
+      h.pool.dispose()
+    })
+
+    test("未配置 model 时,session.create 不携带 model(交由 opencode 默认解析)", async () => {
+      const h = harness({}, 5_000)
+      const task = await toPending(h.store, "写个功能")
+      const result = await h.pool.dispatch(task, "w1", `派发提示词:${task.title}`)
+      expect(result).toBe("ok")
+      expect(h.session.created).toHaveLength(1)
+      expect(h.session.created[0].model).toBeUndefined()
+      h.pool.dispose()
+    })
+  })
+
+  describe("复验：默认模型(未显式 model)正常领取", () => {
+    test("未配置 model 时,session.create 不携带 model,任务仍可被正常派发并领取(结算)", async () => {
+      const h = harness({}, 5_000) // 不传 model → 使用 opencode 默认解析
+      const task = await toPending(h.store, "默认模型任务")
+      const result = await h.pool.dispatch(task, "w1", `派发提示词:${task.title}`)
+      expect(result).toBe("ok")
+      expect(h.session.created).toHaveLength(1)
+      expect(h.session.created[0].model).toBeUndefined() // 未显式指定 model
+      expect(h.session.created[0].directory).toBe("/proj") // 工作目录正确
+      expect(h.pool.inFlightCount()).toBe(1) // 在途
+
+      // 模拟 worker 领取:任务退出 pending → 按 taskID 结算,名额释放、会话保留
+      await h.store.claim({ id: task.id, sessionID: "ses_w1", agent: "build" })
+      h.pool.sweep(await h.store.list())
+      expect(h.pool.inFlightCount()).toBe(0) // 名额已释放,无泄漏
+      expect(h.session.removed).toEqual([]) // 会话保留(worker 正在用)
+      h.pool.dispose()
+    })
   })
 })

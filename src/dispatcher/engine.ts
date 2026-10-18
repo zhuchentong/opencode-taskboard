@@ -375,6 +375,10 @@ export function initDispatcher(
     await dispatchFrontier(pending[0])
   }
 
+  // 环境自举:启动后自动评估一次,处理存量待领取任务(无需外部写事件触发)。
+  // evaluate 内部已 await loaded,沿状态就绪后才会真正执行派发决策。
+  void evaluate()
+
   const trigger = createTrigger({
     evaluate,
     externalDebounceMs: deps.evaluateMs ?? DISPATCH_CAPS.evaluateMs,
@@ -394,6 +398,20 @@ export function initDispatcher(
   })
 
   metrics.startPoll()
+
+  /** 环境自举:仅当存在 pending 任务时触发首次评估,存量任务在 dispatcher
+   * 就绪后即被派发,无需等待用户写事件触发。空看板时不触发,避免首次
+   * 评估产生无意义的 empty 跳过日志。 */
+  void (async () => {
+    try {
+      const initial = await deps.store.list()
+      if (initial.some((t) => t.status === "pending")) {
+        trigger.requestInternal("startup")
+      }
+    } catch {
+      // 列表失败不影响启动,后续写事件会触发评估
+    }
+  })()
 
   return {
     notifyWrite: () => trigger.requestExternal(),

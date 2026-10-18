@@ -18,17 +18,17 @@ async function toAnalyzing(s: Store, title: string, sessionID = "ses_ext"): Prom
 
 function fakeSession(overrides: Partial<DispatcherSession> = {}) {
   const prompts: { sessionID: string; text: string }[] = []
-  const created: { id: string; title?: string; directory?: string }[] = []
+  const created: { id: string; title?: string; directory?: string; model?: { providerID: string; id: string } }[] = []
   const removed: string[] = []
   let seq = 0
   const sess = {
     prompts,
     created,
     removed,
-    create: async (input?: { title?: string; location?: { directory: string } }) => {
+    create: async (input?: { title?: string; location?: { directory: string }; model?: { providerID: string; id: string } }) => {
       if (overrides.create) return overrides.create(input)
       const id = `ses_w${++seq}`
-      created.push({ id, title: input?.title, directory: input?.location?.directory })
+      created.push({ id, title: input?.title, directory: input?.location?.directory, model: input?.model })
       return { id, title: input?.title }
     },
     get: async (input: { sessionID: string }) => {
@@ -60,6 +60,7 @@ function harness(
     evaluateTickMs?: number
     promptFail?: boolean
     createFail?: boolean
+    model?: { providerID: string; id: string }
   } = {},
   storageEntries?: Record<string, unknown>,
 ) {
@@ -79,7 +80,13 @@ function harness(
     ...(opts.createFail ? { create: async () => { throw new Error("cannot create session") } } : {}),
   })
   const d = initDispatcher(
-    { session, storage, projectID: "p1", directory: "/proj" },
+    {
+      session,
+      storage,
+      projectID: "p1",
+      directory: "/proj",
+      ...(opts.model ? { model: opts.model } : {}),
+    },
     {
       store,
       log: (m) => lines.push(m),
@@ -98,6 +105,22 @@ function harness(
 }
 
 describe("engine 装配(沿驱动 initDispatcher)", () => {
+  test("模型透传:initDispatcher 传入 model 时,session.create 收到 model 字段(TASKBOARD_MODEL 生效)", async () => {
+    const h = harness({
+      claimWaitMs: 5_000,
+      model: { providerID: "opencode", id: "nemotron-3.5-super-vl-free" },
+    })
+    await toPending(h.store, "带模型任务")
+    await h.store.setSettings({ autoDispatch: true })
+    await h.fire()
+    await new Promise((r) => setTimeout(r, 80))
+    expect(h.session.created[0].model).toEqual({
+      providerID: "opencode",
+      id: "nemotron-3.5-super-vl-free",
+    })
+    h.d.dispose()
+  })
+
   test("死代码回归钉子:两个 pending、单次写事件,排空循环自动派完两单(即时填槽)", async () => {
     const h = harness({ claimWaitMs: 5_000 })
     await toPending(h.store, "任务A")

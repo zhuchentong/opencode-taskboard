@@ -16,8 +16,8 @@ export interface SessionPoolDeps {
   session: DispatcherSession
   /** worker 会话的工作目录:必须显式传,否则回退到服务进程 cwd(实测曾落到 .debug/playground) */
   directory: string
-  /** 会话创建时显式指定的模型(provider/model);缺省用 opencode 默认解析 */
-  model?: { providerID: string; modelID: string }
+  /** 会话创建时显式指定的模型(provider/model);缺省用 opencode 默认解析。与 SDK Model.Ref 对齐: { id, providerID } */
+  model?: { providerID: string; id: string }
   /** 派发后等待 worker 领取的时限 */
   claimWaitMs: number
   /** 注入 store.patch:超时撤任务(先撤任务再回收会话,顺序不能反) */

@@ -20,7 +20,7 @@ type TokenRead = { input: number; output: number; reasoning: number; cache: { re
 
 function fakeSession() {
   const prompts: { sessionID: string; text: string }[] = []
-  const created: { id: string; title?: string; directory?: string }[] = []
+  const created: { id: string; title?: string; directory?: string; model?: { providerID: string; id: string } }[] = []
   const removed: string[] = []
   const tokens = new Map<string, TokenRead>()
   let seq = 0
@@ -29,9 +29,9 @@ function fakeSession() {
     created,
     removed,
     tokens,
-    create: async (input?: { title?: string; location?: { directory: string } }) => {
+    create: async (input?: { title?: string; location?: { directory: string }; model?: { providerID: string; id: string } }) => {
       const id = `ses_w${++seq}`
-      created.push({ id, title: input?.title, directory: input?.location?.directory })
+      created.push({ id, title: input?.title, directory: input?.location?.directory, model: input?.model })
       return { id, title: input?.title }
     },
     get: async (input: { sessionID: string }) => {
@@ -234,6 +234,42 @@ describe("initDispatcher 接线", () => {
     await sleep(40)
     expect(h.session.prompts).toHaveLength(0)
     h.d.dispose()
+  })
+
+  test("环境自举：存量 pending 任务在 dispatcher 就绪后即被派发，无需手动 fire", async () => {
+    // 先建 pending 任务（模拟环境自举时存量任务已存在于 store），再创建派发器
+    const entries: Record<string, unknown> = {}
+    const storage = {
+      get: async (k: string) => entries[k],
+      set: async (k: string, v: unknown) => {
+        entries[k] = v
+      },
+    }
+    const store = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    await store.setSettings({ autoDispatch: true })
+    await toPending(store, "存量任务")
+
+    const session = fakeSession()
+    const lines: string[] = []
+    let registered: ((tasks?: Task[]) => void) | null = null
+    const d = initDispatcher(
+      { session, storage, projectID: "p1", directory: "/proj" },
+      {
+        store,
+        log: (m) => lines.push(m),
+        onWrite: (fn) => (registered = fn),
+        evaluateMs: 10,
+        claimWaitMs: 5_000,
+        minIntervalMs: 0,
+        usagePollMs: 0,
+        evaluateTickMs: 0,
+      },
+    )
+    // 不调用 registered() / fire()，仅等待自启动评估（evaluateMs=10 防抖）
+    await sleep(200)
+    expect(session.prompts).toHaveLength(1)
+    expect(session.prompts[0].text).toContain("存量任务")
+    d.dispose()
   })
 
   test("pending + 开关开启 → 每任务新建会话并派发，prompt 带上 taskID，工作目录为项目目录", async () => {

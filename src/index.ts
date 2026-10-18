@@ -159,7 +159,10 @@ export default Plugin.define({
       ? (() => {
           const idx = taskboardModelSpec.indexOf("/")
           return idx > 0
-            ? { providerID: taskboardModelSpec.slice(0, idx), id: taskboardModelSpec.slice(idx + 1) }
+            ? {
+                providerID: taskboardModelSpec.slice(0, idx),
+                id: taskboardModelSpec.slice(idx + 1),
+              }
             : undefined
         })()
       : undefined

@@ -117,7 +117,11 @@ export interface SessionTokens {
 }
 
 export interface DispatcherSession {
-  create(input?: { title?: string; location?: { directory: string } }): Promise<{ id: string }>
+  create(input?: {
+    title?: string
+    location?: { directory: string }
+    model?: { providerID: string; id: string }
+  }): Promise<{ id: string }>
   get(input: { sessionID: string }): Promise<unknown>
   /**
    * 触发一个会话回合。
