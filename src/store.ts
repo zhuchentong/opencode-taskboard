@@ -1,5 +1,5 @@
 import { transitionSpans } from "./spans"
-import { StoreError, type BoardSettings, type Status, type Task, type TaskPatch, type TaskUsage } from "./types"
+import { DEFAULT_PROJECT_ID, StoreError, type BoardSettings, type Project, type Status, type Task, type TaskPatch, type TaskUsage } from "./types"
 
 export interface KVBackend {
   get(key: string): Promise<unknown | undefined>
@@ -63,6 +63,7 @@ export function storageBackend(storage: CtxStorageLike, keyPrefix: string): KVBa
 }
 
 const TASK_PREFIX = "task/"
+const PROJECT_PREFIX = "project/"
 const SETTINGS_KEY = "settings/board"
 const CLAIM_STATES: ReadonlySet<Status> = new Set(["analyzing", "executing"])
 const CONFIRM_FROM: Record<"confirm" | "reject" | "comment", ReadonlySet<Status>> = {
@@ -89,11 +90,18 @@ export interface Store {
    * 消耗是纯计量数据，刷新它会让正在执行的任务无端跳到看板顶部。
    */
   recordUsage(input: { id: string; usage: TaskUsage }): Promise<Task>
+  /** 项目清单:合成默认项目恒打头,其余按 createdAt 升序 */
+  listProjects(): Promise<Project[]>
+  /** 取项目;默认项目返回合成值,不查存储 */
+  getProject(id: string): Promise<Project>
+  createProject(input: { name: string; workspace: string; description?: string }): Promise<Project>
+  updateProject(id: string, patch: { name?: string; workspace?: string; description?: string }): Promise<Project>
+  deleteProject(id: string): Promise<void>
 }
 
 export function createStore(
   backend: KVBackend,
-  opts: { requireAnalysisConfirm: boolean },
+  opts: { requireAnalysisConfirm: boolean; directory?: string },
 ): Store {
   // 全局写互斥：所有写操作串行化（spec"每任务锁"的超集，并使无 id claim 天然原子）
   let chain: Promise<unknown> = Promise.resolve()
@@ -134,6 +142,31 @@ export function createStore(
       modelExecute: raw?.modelExecute,
     }
   }
+
+  /** 合成默认项目:不占存储键,workspace 动态取服务目录(落盘会随部署漂移,动态解析永远正确) */
+  const defaultProject = (): Project => ({
+    id: DEFAULT_PROJECT_ID,
+    name: "默认项目",
+    workspace: opts.directory ?? "(未配置)",
+    description: "内置项目：未指定项目的任务；worker 在看板服务目录运行",
+    builtin: true,
+    createdAt: 0,
+    updatedAt: 0,
+  })
+
+  const readProject = async (id: string): Promise<Project> => {
+    if (id === DEFAULT_PROJECT_ID) return defaultProject()
+    const raw = await backend.get(PROJECT_PREFIX + id)
+    if (!raw) throw new StoreError("not_found", `项目不存在：${id}`)
+    return raw as Project
+  }
+
+  const readAllProjects = async (): Promise<Project[]> => {
+    const entries = await backend.scan(PROJECT_PREFIX)
+    return entries.map((e) => e.value as Project).sort((a, b) => a.createdAt - b.createdAt)
+  }
+
+  const newProjectId = () => `project_${crypto.randomUUID().slice(0, 8)}`
 
   // 人工拖拽的 claim 维护（spec §5.4）；confirm/reject 动作不走此逻辑
   const applyDragClaim = (prev: Task, next: Task, now: number): void => {
@@ -228,7 +261,6 @@ export function createStore(
         }
         if (p.description !== undefined) next.description = p.description
 
-        // 人工流转（拖拽/键盘移动/确认/打回）同样驱动两段计时；只改标题描述时内部自动跳过
         transitionSpans(task, next, now)
         // 进入「待领取」即开新一轮排队计时（拖入 / 打回 / 放弃回 pending）；已在 pending 不重置
         if (next.status === "pending" && task.status !== "pending") next.pendingAt = now
@@ -370,6 +402,64 @@ export function createStore(
         const next: Task = { ...task, usage: input.usage }
         await backend.set(TASK_PREFIX + input.id, next)
         return next
+      })
+    },
+
+    async listProjects() {
+      return [defaultProject(), ...(await readAllProjects())]
+    },
+
+    getProject(id: string) {
+      return readProject(id)
+    },
+
+    createProject(input) {
+      return serialized(async () => {
+        const name = typeof input.name === "string" ? input.name.trim() : ""
+        if (!name) throw new StoreError("invalid_input", "项目名称不能为空")
+        const all = await readAllProjects()
+        if (all.some((p) => p.name === name)) throw new StoreError("conflict", `项目名称已存在：${name}`)
+        const now = Date.now()
+        const project: Project = {
+          id: newProjectId(),
+          name,
+          workspace: input.workspace,
+          description: input.description,
+          createdAt: now,
+          updatedAt: now,
+        }
+        await backend.set(PROJECT_PREFIX + project.id, project)
+        return project
+      })
+    },
+
+    updateProject(id, patch) {
+      return serialized(async () => {
+        if (id === DEFAULT_PROJECT_ID) throw new StoreError("invalid_input", "默认项目不可修改")
+        const cur = await readProject(id)
+        const next: Project = { ...cur }
+        if (patch.name !== undefined) {
+          const name = patch.name.trim()
+          if (!name) throw new StoreError("invalid_input", "项目名称不能为空")
+          const all = await readAllProjects()
+          if (all.some((p) => p.id !== id && p.name === name)) {
+            throw new StoreError("conflict", `项目名称已存在：${name}`)
+          }
+          next.name = name
+        }
+        if (patch.workspace !== undefined) next.workspace = patch.workspace
+        if (patch.description !== undefined) next.description = patch.description
+        next.updatedAt = Date.now()
+        await backend.set(PROJECT_PREFIX + id, next)
+        return next
+      })
+    },
+
+    deleteProject(id) {
+      return serialized(async () => {
+        if (id === DEFAULT_PROJECT_ID) throw new StoreError("invalid_input", "默认项目不可删除")
+        if (!(await backend.get(PROJECT_PREFIX + id))) throw new StoreError("not_found", `项目不存在：${id}`)
+        await backend.remove(PROJECT_PREFIX + id)
       })
     },
   }

@@ -52,6 +52,25 @@ export interface TaskUsage {
   at: number
 }
 
+export const DEFAULT_PROJECT_ID = "project_default"
+
+/**
+ * 看板「项目」:用户可管理的任务分组,自带 worker 工作区目录。
+ * 默认项目是合成实体(不占存储键),由 store 按 opts.directory 动态提供。
+ */
+export interface Project {
+  id: string // `project_<8位hex>`
+  /** 唯一,非空;允许改名(外键是 id,不断链) */
+  name: string
+  /** worker 会话的工作目录(绝对路径) */
+  workspace: string
+  description?: string
+  /** 仅合成的默认项目为 true */
+  builtin?: boolean
+  createdAt: number
+  updatedAt: number
+}
+
 export interface Task {
   id: string
   title: string
