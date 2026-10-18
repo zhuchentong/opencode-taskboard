@@ -281,6 +281,10 @@ export function createServer(
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: opts.port,
+    // SSE 长连接守护：Bun 默认 idleTimeout=10s（无数据即断），而 SSE 心跳间隔 25s——
+    // 每次空闲超 10s 连接就被服务端掐掉，浏览器表现为「重连中/实时」反复切换 + 点击无反应。
+    // 255s 为 Bun 允许的最大值；心跳 25s < 255s，保活充分（终审后真实验收发现的根因）。
+    idleTimeout: 255,
     async fetch(req) {
       const url = new URL(req.url)
       try {

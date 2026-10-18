@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs"
 import { createStore, memoryBackend } from "../src/store"
 import { createServer, type ServerHandle } from "../src/server"
 import type { Store } from "../src/types"
@@ -304,5 +304,16 @@ describe("静态页", () => {
     } finally {
       rmSync(FIXDIR, { recursive: true, force: true })
     }
+  })
+})
+
+describe("SSE 连接稳定性（idleTimeout 回归守护）", () => {
+  // 环境差异说明（终审实测）：Bun 1.4.3 CLI 下，ReadableStream 响应若在 start 后异步入队再短暂
+  // 静默，会被设 Content-Length 并立即 EOF——本测试环境无法表达 opencode 运行时的真实 SSE 行为
+  // （后者 45s 实测 chunked 持续）。故只做源文本断言钉住配置；行为验证依赖真实浏览器（无头复现脚本
+  // 见 /tmp/opencode/switch-debug/）。
+  test("Bun.serve 配置 idleTimeout: 255（源文本断言）", () => {
+    const src = readFileSync(new URL("../src/server.ts", import.meta.url), "utf8")
+    expect(src).toContain("idleTimeout: 255")
   })
 })
