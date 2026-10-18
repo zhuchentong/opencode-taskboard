@@ -102,6 +102,8 @@ export function initDispatcher(
   let lastEnabled = false
   let workerSeq = 0
   let lastSkipReason = ""
+  /** interval 节流窗到期重试 timer(单实例防重入;缺陷 B:跳过 interval 后此前只能等 30s 兜底 tick) */
+  let intervalRetryTimer: ReturnType<typeof setTimeout> | null = null
   let todayKey = ""
   let todayCount = 0
   let disposed = false
@@ -364,6 +366,16 @@ export function initDispatcher(
         const extra = v.reason === "concurrency-full" ? `，${pendingTotal} 个任务排队` : ""
         deps.log(`派发跳过：${v.reason}${extra}`)
       }
+      // 节流窗到期后自动重试:否则续派被 interval 拒绝即丢弃,批量派发退化为 30s 兜底一个。
+      // 仅 interval 需要定时重试(纯时间窗、无伴随事件);其余守卫(cap/cooldown 等)各有恢复机制。
+      if (v.reason === "interval" && intervalRetryTimer === null && lastDispatchAt > 0) {
+        const minInterval = deps.minIntervalMs ?? DISPATCH_CAPS.minIntervalMs
+        const wait = Math.max(0, minInterval - (nowMs - lastDispatchAt)) + 5
+        intervalRetryTimer = setTimeout(() => {
+          intervalRetryTimer = null
+          if (!disposed) trigger.requestInternal("interval-window-elapsed")
+        }, wait)
+      }
       lastSkipReason = v.reason
       return
     }
@@ -427,6 +439,10 @@ export function initDispatcher(
     notifyWrite: () => trigger.requestExternal(),
     dispose: () => {
       disposed = true
+      if (intervalRetryTimer !== null) {
+        clearTimeout(intervalRetryTimer)
+        intervalRetryTimer = null
+      }
       trigger.dispose()
       pool.dispose()
       metrics.dispose()
