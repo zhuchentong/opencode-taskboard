@@ -273,6 +273,7 @@ export function createStore(
         if (p.description !== undefined) next.description = p.description
         if (p.projectId !== undefined) next.projectId = await resolveProjectId(p.projectId)
 
+        // 人工流转（拖拽/键盘移动/确认/打回）同样驱动两段计时；只改标题描述时内部自动跳过
         transitionSpans(task, next, now)
         // 进入「待领取」即开新一轮排队计时（拖入 / 打回 / 放弃回 pending）；已在 pending 不重置
         if (next.status === "pending" && task.status !== "pending") next.pendingAt = now

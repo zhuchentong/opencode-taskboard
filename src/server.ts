@@ -241,6 +241,7 @@ export function createServer(
     const projMatch = pathname.match(/^\/api\/projects\/([^/]+)$/)
     if (projMatch) {
       const pid = decodeURIComponent(projMatch[1])
+      if (method === "GET") return Response.json(await store.getProject(pid))
       if (method === "PATCH") {
         const bad = guard(req)
         if (bad) return bad

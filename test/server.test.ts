@@ -453,3 +453,14 @@ describe("项目 API", () => {
     expect(((await r2.json()) as { projectId: string }).projectId).toBe(DEFAULT_PROJECT_ID)
   })
 })
+
+describe("项目 API 补遗(审查 I-1)", () => {
+  test("GET /api/projects/:id 返回项目(次要实例代理链依赖)", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    const base = setup(s)
+    const p = await s.createProject({ name: "代理链", workspace: process.cwd() })
+    const r = await fetch(`${base}/api/projects/${p.id}`)
+    expect(r.status).toBe(200)
+    expect(((await r.json()) as { id: string }).id).toBe(p.id)
+  })
+})
