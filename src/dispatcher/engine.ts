@@ -354,13 +354,16 @@ export function initDispatcher(
       lastSkipReason = v.reason
       return
     }
-    lastSkipReason = ""
     // pending 已剔除冷却中与在途任务；若为空（全部待领取任务均在任务冷却或已在途），
-    // 不可派遣 pending[0]（undefined 会崩溃），记日志后等下一轮（冷却到期会自然恢复）
+    // 不可派遣 pending[0]（undefined 会崩溃），记日志后等下一轮（冷却到期会自然恢复）。
+    // lastSkipReason 不应在此被误清为 ""：pendingTotal>0 说明看板上仍有待领取任务，
+    // 只是暂时不可立即派发，需如实反映跳过原因，避免前端/命令显示"空闲"的误导。
     if (pending.length === 0) {
       deps.log("无可立即派发的待领取任务：全部在任务冷却中或已在途派发")
+      lastSkipReason = pendingTotal > 0 ? "cooldown" : ""
       return
     }
+    lastSkipReason = ""
     // 一轮至多派发一个;还剩空槽由 dispatch 完成的 requestInternal 排空续接
     await dispatchFrontier(pending[0])
   }

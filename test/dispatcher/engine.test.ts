@@ -416,4 +416,27 @@ describe("engine 装配(沿驱动 initDispatcher)", () => {
     expect((await h.store.get(t1.id)).status).toBe("pending") // 任务仍在待领取
     h.d.dispose()
   }, 4000)
+
+  test("全部待领取任务在任务冷却中时 lastSkipReason 应为 cooldown 而非空字符串", async () => {
+    const h = harness({ claimWaitMs: 20, backoffBaseMs: 1000, minIntervalMs: 1 })
+    await h.store.setSettings({ autoDispatch: true })
+    const t1 = await toPending(h.store, "t1")
+    h.fire()
+    await sleep(50) // 派出，进入 awaiting（in-flight）
+    expect(h.session.prompts).toHaveLength(1)
+
+    await sleep(40) // claimWaitMs=20ms 超时，任务退回 pending 并进入任务冷却（1000ms）
+    expect((await h.store.get(t1.id)).status).toBe("pending")
+    expect(h.d.status().queuedCooldownCount).toBe(1)
+
+    // 再次评估：pendingTotal=1 > 0，pending（剔除冷却后）为空
+    h.fire()
+    await sleep(50)
+    expect(h.lines.some((l) => l.includes("派发跳过：empty"))).toBe(false) // 不报 empty
+    expect(h.session.prompts).toHaveLength(1) // 未再派发
+    expect((await h.store.get(t1.id)).status).toBe("pending") // 任务仍在待领取
+    // lastSkipReason 应如实反映：待领取任务存在但全部在任务级冷却中，不可立即派发
+    expect(h.d.status().lastSkipReason).toBe("cooldown")
+    h.d.dispose()
+  }, 4000)
 })
