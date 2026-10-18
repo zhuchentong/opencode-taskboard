@@ -16,8 +16,6 @@ export interface SessionPoolDeps {
   session: DispatcherSession
   /** worker 会话的工作目录:必须显式传,否则回退到服务进程 cwd(实测曾落到 .debug/playground) */
   directory: string
-  /** 会话创建时显式指定的模型(provider/model);缺省用 opencode 默认解析。与 SDK Model.Ref 对齐: { id, providerID } */
-  model?: { providerID: string; id: string }
   /** 派发后等待 worker 领取的时限 */
   claimWaitMs: number
   /** 注入 store.patch:超时撤任务(先撤任务再回收会话,顺序不能反) */
@@ -110,8 +108,13 @@ export function createSessionPool(deps: SessionPoolDeps) {
   }
 
   return {
-    /** 派发:建会话 → 登记在途 → 发提示词(text 由 engine 经 prompt.ts 构建)。返回结果供 engine 记对应连败口径。 */
-    async dispatch(task: Task, workerName: string, text: string): Promise<DispatchOutcome> {
+    /**
+     * 派发:建会话 → 登记在途 → 发提示词(text 由 engine 经 prompt.ts 构建)。
+     * model 为分析阶段模型(create key 是 id,SDK Model.Ref;首 prompt key 是 modelID),
+     * 会话默认模型与首回合模型一致;缺省用 opencode 默认解析。
+     * 返回结果供 engine 记对应连败口径。
+     */
+    async dispatch(task: Task, workerName: string, text: string, model?: { providerID: string; id: string }): Promise<DispatchOutcome> {
       if (disposed) {
         deps.log(`派发器已卸载,跳过派发 task=${task.id}`)
         return "create-fail"
@@ -123,7 +126,7 @@ export function createSessionPool(deps: SessionPoolDeps) {
           location: { directory: deps.directory },
           // 实验:显式指定 model——诊断发现无 model 的会话创建即被 opencode 挂起
           // (time_suspended=创建时刻,回合永不启动);正常会话有模型。
-          ...(deps.model ? { model: deps.model } : {}),
+          ...(model ? { model } : {}),
         } as never)
         sessionID = info.id
       } catch (e) {
@@ -145,7 +148,8 @@ export function createSessionPool(deps: SessionPoolDeps) {
       awaiting.set(task.id, entry)
 
       try {
-        await deps.session.prompt({ sessionID, text })
+        const promptModel = model ? { providerID: model.providerID, modelID: model.id } : undefined
+        await deps.session.prompt({ sessionID, text, ...(promptModel ? { model: promptModel } : {}) })
       } catch (e) {
         // 派发异常是会话 API 层面的故障:回收名额与会话,全局口径由 engine 记
         releaseEntry(task.id, "派发失败")

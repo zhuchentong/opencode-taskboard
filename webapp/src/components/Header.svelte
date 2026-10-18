@@ -8,6 +8,7 @@
   import type { ConnState } from "$lib/api"
   import type { BoardSettings } from "$lib/types"
   import type { ThemeMode } from "../theme"
+  import { MODEL_PLACEHOLDER, groupModels } from "$lib/model-options"
   import StatusDot from "./StatusDot.svelte"
 
   let {
@@ -15,19 +16,25 @@
     conn,
     mode,
     modeLabel,
+    models,
     oncreate,
     ontoggle,
     ondispatch,
+    onmodel,
     onsetmode,
   }: {
     settings: BoardSettings
     conn: ConnState
     mode: ThemeMode
     modeLabel: string
+    /** 可用模型清单("provider/model" 行;/api/models 不可用时为空 → 下拉只留默认项+提示) */
+    models: string[]
     /** 返回 Promise：成功后弹窗关闭并清空；失败（Promise reject）保留输入与弹窗，错误提示由 App 的 toast 负责 */
     oncreate: (title: string, description: string) => Promise<void>
     ontoggle: (requireAnalysisConfirm: boolean) => void
     ondispatch: (autoDispatch: boolean) => void
+    /** 阶段模型变更(phase 为设置字段名;空串=跟随 opencode 默认) */
+    onmodel: (phase: "modelAnalyze" | "modelExecute", value: string) => void
     /** 主题菜单选择（auto 跟随系统 / light 浅色 / dark 深色） */
     onsetmode: (mode: ThemeMode) => void
   } = $props()
@@ -37,6 +44,17 @@
   let description = $state("")
   const canSubmit = $derived(title.trim().length > 0)
   let submitting = $state(false)
+
+  // 阶段模型下拉:受控值镜像(settings 是 props 不可 bind);选项异步就绪后重申当前值,
+  // 防浏览器在 value 不在 option 列表时静默回落到首项
+  const modelGroups = $derived(groupModels(models))
+  let analyzeSel = $state("")
+  let executeSel = $state("")
+  $effect(() => {
+    void modelGroups
+    analyzeSel = settings.modelAnalyze ?? ""
+    executeSel = settings.modelExecute ?? ""
+  })
 
   function openCreate() {
     title = ""
@@ -99,6 +117,50 @@
         aria-hidden="true">
         {settings.autoDispatch ? "已开启" : "已关闭"}
       </span>
+    </label>
+    <label
+      class="inline-flex items-center gap-2 rounded-lg border border-border bg-card/40 px-3 py-1.5 whitespace-nowrap"
+      title="分析阶段(领取/分析/重析回合)worker 会话使用的模型;「跟随默认」用 opencode 默认解析">
+      <span class="text-[13px] font-medium">分析模型</span>
+      <select
+        bind:value={analyzeSel}
+        onchange={() => onmodel("modelAnalyze", analyzeSel)}
+        class="max-w-44 rounded-md border border-border bg-background px-1.5 py-1 text-[12px] text-foreground outline-none focus:ring-1 focus:ring-ring"
+        aria-label="分析阶段模型">
+        <option value="">{MODEL_PLACEHOLDER}</option>
+        {#if modelGroups.length === 0}
+          <option value="__none__" disabled>(模型列表不可用)</option>
+        {/if}
+        {#each modelGroups as g (g.provider)}
+          <optgroup label={g.provider}>
+            {#each g.models as m (m)}
+              <option value={`${g.provider}/${m}`}>{m}</option>
+            {/each}
+          </optgroup>
+        {/each}
+      </select>
+    </label>
+    <label
+      class="inline-flex items-center gap-2 rounded-lg border border-border bg-card/40 px-3 py-1.5 whitespace-nowrap"
+      title="执行阶段(放行后的执行回合)worker 会话使用的模型;与分析模型可不同,同会话按回合切换">
+      <span class="text-[13px] font-medium">执行模型</span>
+      <select
+        bind:value={executeSel}
+        onchange={() => onmodel("modelExecute", executeSel)}
+        class="max-w-44 rounded-md border border-border bg-background px-1.5 py-1 text-[12px] text-foreground outline-none focus:ring-1 focus:ring-ring"
+        aria-label="执行阶段模型">
+        <option value="">{MODEL_PLACEHOLDER}</option>
+        {#if modelGroups.length === 0}
+          <option value="__none__" disabled>(模型列表不可用)</option>
+        {/if}
+        {#each modelGroups as g (g.provider)}
+          <optgroup label={g.provider}>
+            {#each g.models as m (m)}
+              <option value={`${g.provider}/${m}`}>{m}</option>
+            {/each}
+          </optgroup>
+        {/each}
+      </select>
     </label>
     <StatusDot state={conn} />
     <DropdownMenu.Root>

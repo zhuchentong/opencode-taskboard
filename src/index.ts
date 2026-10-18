@@ -43,6 +43,39 @@ async function probeHealth(port: number): Promise<{ ok?: boolean; primary?: bool
   }
 }
 
+/** 模型清单缓存(模块级,主次实例共用):阶段模型下拉的数据源。
+ * ⚠️ 实证(2026-10-18):daemon 进程内 exec `opencode` CLI 会导致 daemon 重启(子进程 CLI
+ * 干预 service 生命周期),严禁在插件进程内起 opencode 子进程 —— 本实现只读本地文件:
+ * provider 集合取全局 opencode.json 的 providers 键(本机显式配置=实际可用),
+ * 模型清单从 models.dev 元数据缓存(~/.cache/opencode/models.json)展开,剔除显式 disabled。 */
+let modelsCache: { at: number; list: string[] } | null = null
+export async function listModels(): Promise<string[]> {
+  if (modelsCache && Date.now() - modelsCache.at < 300_000) return modelsCache.list
+  let list: string[] = []
+  try {
+    const home = process.env.HOME ?? ""
+    const cfg = await Bun.file(`${home}/.config/opencode/opencode.json`).json()
+    const meta = await Bun.file(`${home}/.cache/opencode/models.json`).json()
+    const providers = (cfg?.providers ?? {}) as Record<string, { models?: Record<string, { disabled?: boolean }> }>
+    for (const [providerID, pcfg] of Object.entries(providers)) {
+      const disabled = new Set(
+        Object.entries(pcfg.models ?? {})
+          .filter(([, v]) => v?.disabled)
+          .map(([k]) => k),
+      )
+      const models = (meta?.[providerID]?.models ?? {}) as Record<string, unknown>
+      for (const modelID of Object.keys(models)) {
+        if (!disabled.has(modelID)) list.push(`${providerID}/${modelID}`)
+      }
+    }
+    list.sort()
+  } catch {
+    // 配置/元数据不可读:空列表,前端提示
+  }
+  modelsCache = { at: Date.now(), list }
+  return list
+}
+
 export async function arbitrate(opts: {
   port: number
   token: string
@@ -62,6 +95,7 @@ export async function arbitrate(opts: {
         primary,
         projectID: opts.projectID,
         logs: opts.logs,
+        listModels,
         onWrite: (tasks) => opts.hooks.onWrite?.(tasks),
       })
     } catch {

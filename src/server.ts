@@ -56,6 +56,8 @@ export function createServer(
     primary: boolean
     projectID: string
     logs?: () => readonly string[]
+    /** 可用模型清单(阶段模型下拉数据源;index 注入 opencode models CLI + 缓存) */
+    listModels?: () => Promise<string[]>
     /** 每次写广播快照后异步触发（自动派发器等观察者）；携带快照任务列表（沿驱动实时消费），不影响响应 */
     onWrite?: (tasks: Task[]) => void
   },
@@ -181,6 +183,10 @@ export function createServer(
     }
     if (pathname === "/api/logs") {
       return Response.json({ logs: opts.logs?.() ?? [] })
+    }
+    // 模型列表(读路径无鉴权):worker 阶段模型下拉的数据源;未注入(如测试)返回空列表
+    if (pathname === "/api/models" && method === "GET") {
+      return Response.json({ models: (await opts.listModels?.()) ?? [] })
     }
     if (pathname === "/api/events" && method === "GET") {
       return handleEvents(req)

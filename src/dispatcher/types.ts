@@ -127,8 +127,13 @@ export interface DispatcherSession {
    * 触发一个会话回合。
    * ⚠️ 实现契约:必须在回合触发后立即返回,不得等待回合结束 ——
    * 否则评估排空循环(trigger.ts)会在单个 prompt 上长时间阻塞,填槽与唤醒全部停摆。
+   * model 为可选的按回合模型(SDK prompt 形态 key 是 modelID;运行时不透传则被忽略,退化为会话模型)。
    */
-  prompt(input: { sessionID: string; text: string }): Promise<unknown>
+  prompt(input: {
+    sessionID: string
+    text: string
+    model?: { providerID: string; modelID: string }
+  }): Promise<unknown>
   interrupt?(input: { sessionID: string }): Promise<unknown>
   remove?(input: { sessionID: string }): Promise<unknown>
 }

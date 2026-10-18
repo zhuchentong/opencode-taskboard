@@ -47,7 +47,6 @@ function fakeSession(overrides: Partial<DispatcherSession> = {}): DispatcherSess
 function harness(
   overrides: Partial<DispatcherSession> = {},
   claimWaitMs = 20,
-  model?: { providerID: string; id: string },
 ) {
   const store = createStore(memoryBackend(), { requireAnalysisConfirm: false })
   const lines: string[] = []
@@ -59,7 +58,6 @@ function harness(
   const pool = createSessionPool({
     session,
     directory: "/proj",
-    model,
     claimWaitMs,
     patchTask: async (id, patch) => {
       // 契约(见账本 Task 4 裁决):仅当任务仍在 pending 时撤回;否则视为已被领取
@@ -94,10 +92,13 @@ describe("session-pool(在途表 + taskID 结算 + 统一清理)", () => {
     h.pool.dispose()
   })
 
-  test("派发:显式指定 model 时,建会话输入携带 model 字段(TASKBOARD_MODEL 生效)", async () => {
-    const h = harness({}, 5_000, { providerID: "opencode", id: "nemotron-3.5-super-vl-free" })
+  test("派发:显式指定 model 时,建会话输入携带 model 字段(分析模型经 dispatch 入参生效)", async () => {
+    const h = harness({}, 5_000)
     const task = await toPending(h.store, "带模型派发")
-    const result = await h.pool.dispatch(task, "w1", `派发提示词:${task.title}`)
+    const result = await h.pool.dispatch(task, "w1", `派发提示词:${task.title}`, {
+      providerID: "opencode",
+      id: "nemotron-3.5-super-vl-free",
+    })
     expect(result).toBe("ok")
     expect(h.session.created[0].model).toEqual({
       providerID: "opencode",
@@ -223,9 +224,9 @@ describe("session-pool(在途表 + taskID 结算 + 统一清理)", () => {
     const model = { providerID: "openai", id: "gpt-5" }
 
     test("配置 model 后,session.create 收到 model: { providerID, id };建会话带项目目录与标题", async () => {
-      const h = harness({}, 5_000, model)
+      const h = harness({}, 5_000)
       const task = await toPending(h.store, "写个功能")
-      const result = await h.pool.dispatch(task, "w1", `派发提示词:${task.title}`)
+      const result = await h.pool.dispatch(task, "w1", `派发提示词:${task.title}`, model)
       expect(result).toBe("ok")
       expect(h.session.created).toHaveLength(1)
       expect(h.session.created[0].directory).toBe("/proj")

@@ -129,6 +129,9 @@ export function createStore(
       requireAnalysisConfirm: raw?.requireAnalysisConfirm ?? opts.requireAnalysisConfirm,
       // 默认开启（产品决策：建任务即自动派发符合直觉，日上限/并发上限兜底；已持久化的值尊重原设置）
       autoDispatch: raw?.autoDispatch ?? true,
+      // 阶段模型:undefined=未设置(用运维兜底);空串=显式跟随 opencode 默认;格式容错在派发侧
+      modelAnalyze: raw?.modelAnalyze,
+      modelExecute: raw?.modelExecute,
     }
   }
 

@@ -50,6 +50,12 @@ export async function fetchBoard(): Promise<{ tasks: Task[]; settings: BoardSett
   return { tasks, settings }
 }
 
+/** 可用模型清单(worker 阶段模型下拉数据源);服务端不可用时返回空,组件退化提示 */
+export async function fetchModels(): Promise<string[]> {
+  const r = await request<{ models: string[] }>("/api/models")
+  return r.models
+}
+
 export function createTask(title: string, description?: string): Promise<Task> {
   return request<Task>("/api/tasks", { method: "POST", body: JSON.stringify({ title, description }) })
 }
@@ -62,7 +68,7 @@ export function deleteTask(id: string): Promise<void> {
   return request<void>(`/api/tasks/${encodeURIComponent(id)}`, { method: "DELETE" })
 }
 
-export function putSettings(patch: Partial<{ requireAnalysisConfirm: boolean; autoDispatch: boolean }>): Promise<BoardSettings> {
+export function putSettings(patch: Partial<{ requireAnalysisConfirm: boolean; autoDispatch: boolean; modelAnalyze?: string; modelExecute?: string }>): Promise<BoardSettings> {
   return request<BoardSettings>("/api/settings", { method: "PUT", body: JSON.stringify(patch) })
 }
 

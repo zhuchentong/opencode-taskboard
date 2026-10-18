@@ -8,6 +8,7 @@
 
 import type { Task } from "../types"
 import type { AdvanceRule, DispatcherSession, TaskTransition } from "./types"
+import type { CreateModelRef } from "./model"
 import { buildExecuteNudgePrompt, buildReanalyzePrompt } from "./prompt"
 
 /** 内置规则的静态描述(session 由 makeBuiltinRules 绑定) */
@@ -43,6 +44,8 @@ export function latestUserComment(task: Task): string | null {
 export function makeBuiltinRules(deps: {
   session: DispatcherSession
   log: (m: string) => void
+  /** 阶段模型(可变引用:engine 每轮评估后更新,act 时读最新值);缺省回合跟随会话默认模型 */
+  models?: { analyze?: CreateModelRef; execute?: CreateModelRef }
 }): AdvanceRule[] {
   return BUILTIN_RULES.map((spec): AdvanceRule => ({
     name: spec.name,
@@ -57,7 +60,11 @@ export function makeBuiltinRules(deps: {
         spec.name === "reanalyze-nudge"
           ? buildReanalyzePrompt({ title: task.title }, latestUserComment(task))
           : buildExecuteNudgePrompt({ title: task.title })
-      await deps.session.prompt({ sessionID, text })
+      // 阶段模型:执行唤醒用执行模型;其余(重析唤醒)仍在分析阶段,用分析模型。
+      // prompt 的 model key 是 modelID(SDK 契约,与 create 的 id 不同)。
+      const ref = spec.name === "execute-nudge" ? deps.models?.execute : deps.models?.analyze
+      const model = ref ? { providerID: ref.providerID, modelID: ref.id } : undefined
+      await deps.session.prompt({ sessionID, text, ...(model ? { model } : {}) })
       log(`${spec.label} → session=${sessionID.slice(0, 8)} task=${task.id}`)
     },
   }))

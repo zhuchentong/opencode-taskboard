@@ -18,6 +18,7 @@ import type { Store } from "../store"
 import { StoreError } from "../types"
 import type { Task } from "../types"
 import { makeBuiltinRules, runAdvance } from "./advance"
+import { resolvePhaseModel, type CreateModelRef } from "./model"
 import { createMetrics } from "./metrics"
 import {
   countActive,
@@ -56,9 +57,9 @@ export function initDispatcher(
     projectID: string
     /** worker 会话的工作目录:必须显式传,否则回退到服务进程 cwd */
     directory: string
-    /** worker 会话显式模型(provider/model);缺省用 opencode 默认解析——
-     * 实测(2026-10-18)opencode 对无 model 的后台会话创建即挂起(time_suspended),
-     * 回合永不启动 → 任务无人领取。强烈建议配置(环境变量 TASKBOARD_MODEL)。 */
+    /** 运维兜底模型(env TASKBOARD_MODEL / opencode.json);被看板网页设置覆盖。
+     * 实测(2026-10-18):无 model 的后台会话在异常 daemon 下会挂起(time_suspended),
+     * 回合永不启动 → 任务无人领取。建议至少配一层模型。 */
     model?: { providerID: string; id: string }
   },
   deps: {
@@ -145,9 +146,13 @@ export function initDispatcher(
     markActed: (t: TaskTransition) => markActed(maps.lastActedSeq, t),
     log: deps.log,
   }
+  // 阶段模型(可变引用,evaluate 每轮按最新设置刷新;rules/派发经引用读最新值):
+  // 网页设置 > ctx.model(运维兜底) > null(opencode 默认解析)
+  const phaseModels: { analyze?: CreateModelRef; execute?: CreateModelRef } = {}
   const rules: ReturnType<typeof makeBuiltinRules> = makeBuiltinRules({
     session: ctx.session,
     log: deps.log,
+    models: phaseModels,
   })
 
   const loadDailyCount = async (): Promise<void> => {
@@ -157,9 +162,6 @@ export function initDispatcher(
   const pool = createSessionPool({
     session: ctx.session,
     directory: ctx.directory,
-    // 实验:model 显式指定——无 model 的会话创建即被 opencode 挂起(time_suspended,
-    // 回合永不启动);见 ctx.model 注释与真实验收记录(2026-10-18)。
-    model: ctx.model ? { providerID: ctx.model.providerID, id: ctx.model.id } : undefined,
     claimWaitMs,
     patchTask: async (id, patch) => {
       // 契约(账本 Task 4 裁决):仅当任务仍在 pending 时撤回;否则视为已被领取。
@@ -247,7 +249,7 @@ export function initDispatcher(
   const dispatchFrontier = async (task: Task): Promise<void> => {
     if (disposed) return // 排空循环卡在 await 期间卸载:不再新建会话(终审 M-3)
     const workerName = `w${++workerSeq}`
-    const result = await pool.dispatch(task, workerName, buildDispatchPrompt(task))
+    const result = await pool.dispatch(task, workerName, buildDispatchPrompt(task), phaseModels.analyze)
     if (result === "ok") {
       lastDispatchAt = Date.now()
       todayCount++
@@ -276,6 +278,10 @@ export function initDispatcher(
     await loaded
     // 设置复位:关开 autoDispatch 清全部失败状态并落盘
     const settings = await deps.store.getSettings()
+    // 阶段模型每轮按最新设置刷新:网页改模型下一轮派发即生效(无需重启)
+    const fallback = ctx.model ?? null
+    phaseModels.analyze = resolvePhaseModel("analyze", settings, fallback) ?? undefined
+    phaseModels.execute = resolvePhaseModel("execute", settings, fallback) ?? undefined
     if (settings.autoDispatch && !lastEnabled) {
       if (isPaused() || failStreak > 0 || timeoutStreak > 0 || maps.taskBackoff.size > 0) {
         deps.log("自动领取重新开启,失败状态复位")

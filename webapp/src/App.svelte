@@ -2,7 +2,7 @@
   import { onMount } from "svelte"
   import { get } from "svelte/store"
   import { setThemeMode, themeMode, type ThemeMode } from "./theme"
-  import { fetchBoard, createTask, putSettings, patchTask, deleteTask, BoardApiError, type ConnState } from "./lib/api"
+  import { fetchBoard, fetchModels, createTask, putSettings, patchTask, deleteTask, BoardApiError, type ConnState } from "./lib/api"
   import { applySnapshot, beginOptimistic, emptyState, settle, visibleTasks, type BoardState } from "./lib/optimistic"
   import { STATUSES } from "./lib/board"
   import { notify } from "./lib/notify"
@@ -28,6 +28,7 @@
   let conn = $state<ConnState>("polling")
   let loaded = $state(false)
   let mode = $state<ThemeMode>(get(themeMode))
+  let models = $state<string[]>([])
   let detailId = $state<string | null>(null)
   let detailInitialReject = $state(false)
 
@@ -143,6 +144,10 @@
       onStatus: (s) => (conn = s),
     })
     refresh() // SSE 建连前的首屏兜底
+    // 模型清单(阶段模型下拉数据源);失败留空,下拉只显示默认项
+    fetchModels()
+      .then((m) => (models = m))
+      .catch(() => {})
     return () => {
       disposeEvents()
       unsub()
@@ -180,7 +185,7 @@
   }
 
   // 设置统一通道：乐观生效，失败回滚
-  function changeSettings(patch: Partial<{ requireAnalysisConfirm: boolean; autoDispatch: boolean }>) {
+  function changeSettings(patch: Partial<{ requireAnalysisConfirm: boolean; autoDispatch: boolean; modelAnalyze?: string; modelExecute?: string }>) {
     const prev = board.settings
     board = applySnapshot(board, board.server, { ...prev, ...patch })
     return putSettings(patch)
@@ -200,9 +205,11 @@
     {conn}
     {mode}
     modeLabel={MODE_LABEL[mode]}
+    {models}
     oncreate={handleCreate}
     ontoggle={handleToggle}
     ondispatch={(autoDispatch: boolean) => void changeSettings({ autoDispatch })}
+    onmodel={(phase, value) => void changeSettings({ [phase]: value })}
     onsetmode={setThemeMode}
   />
 

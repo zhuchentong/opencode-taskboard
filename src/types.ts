@@ -79,6 +79,10 @@ export interface BoardSettings {
   requireAnalysisConfirm: boolean
   /** 自动派发：待领取出现任务时自动驱动 worker 会话领取（默认开，已持久化的值尊重原设置） */
   autoDispatch: boolean
+  /** 分析阶段模型("provider/model";空串=跟随 opencode 默认;未设置=用运维兜底) */
+  modelAnalyze?: string
+  /** 执行阶段模型(同上;一任务一会话,执行回合经 prompt per-call model 切换) */
+  modelExecute?: string
 }
 
 export const STORE_ERROR_CODES = [

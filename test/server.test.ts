@@ -317,3 +317,23 @@ describe("SSE 连接稳定性（idleTimeout 回归守护）", () => {
     expect(src).toContain("idleTimeout: 255")
   })
 })
+
+describe("模型列表路由", () => {
+  test("GET /api/models 返回注入的模型清单(读路径无鉴权,与 tasks/logs 一致)", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    const base = setup(s, {
+      listModels: async () => ["zhipuai-coding-plan/glm-5.3-flash", "minimax-cn-coding-plan/MiniMax-M3.1"],
+    })
+    const r = await fetch(`${base}/api/models`).then((x) => x.json())
+    expect(r).toEqual({
+      models: ["zhipuai-coding-plan/glm-5.3-flash", "minimax-cn-coding-plan/MiniMax-M3.1"],
+    })
+  })
+
+  test("未注入 listModels 时返回空列表(前端下拉退化+提示)", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    const base = setup(s)
+    const r = await fetch(`${base}/api/models`).then((x) => x.json())
+    expect(r).toEqual({ models: [] })
+  })
+})
