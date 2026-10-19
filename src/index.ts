@@ -322,9 +322,12 @@ export default Plugin.define({
       clearInterval: clearInterval.bind(globalThis),
     })
 
-    // arbitrate 失败（无可用端口等）时 setup 直接抛错、cleanup 永不执行——此处先拆掉
-    // hub 的合帧定时器，免得留下一个每 150ms 空转的孤儿 interval（同 safeRegister 防僵尸端口）
+    // 装配期任一步失败（端口仲裁、派发器初始化、工具/命令注册），setup 直接抛错、
+    // cleanup 永不执行——统一在此收口：拆掉 hub 的合帧定时器再原样上抛，
+    // 免得留下一个每 150ms 空转的孤儿 interval（同 safeRegister 防僵尸端口）。
+    // 异常语义保持现状：safeRegister 仍先停服再重抛，其余异常原样冒泡。
     let arb: Awaited<ReturnType<typeof arbitrate>>
+    let dispatcher: ReturnType<typeof initDispatcher> | null = null
     try {
       arb = await arbitrate({
         port,
@@ -338,75 +341,74 @@ export default Plugin.define({
         // 主/次实例同样接线：事件总线是 daemon 全局的，本实例的观看者由本实例的 hub 服务
         subscribeLive: (sessionID, send) => liveHub.attach(sessionID, send),
       })
+      log(`就绪：${arb.primary ? "主实例" : "次要实例"} board=http://127.0.0.1:${arb.primaryPort}/`)
+
+      // worker 会话模型:opencode 对无 model 的后台会话创建即挂起(回合永不启动),
+      // 必须显式指定。来源:环境变量 TASKBOARD_MODEL(推荐,daemon 环境继承)> opencode.json 的 plugin.taskboard.model。
+      const pluginOptions = (rawOpts as { plugin?: { taskboard?: { model?: string } } }).plugin?.taskboard
+      const taskboardModelSpec = process.env.TASKBOARD_MODEL ?? pluginOptions?.model ?? (rawOpts as { model?: string }).model
+      const taskboardModel = taskboardModelSpec
+        ? (() => {
+            const idx = taskboardModelSpec.indexOf("/")
+            return idx > 0
+              ? {
+                  providerID: taskboardModelSpec.slice(0, idx),
+                  id: taskboardModelSpec.slice(idx + 1),
+                }
+              : undefined
+          })()
+        : undefined
+      if (taskboardModelSpec && !taskboardModel) log(`TASKBOARD model 配置格式错误(应为 provider/model):${taskboardModelSpec}`)
+      log(`插件 options: ${JSON.stringify(rawOpts)} | worker model: ${taskboardModel ? taskboardModelSpec : "未配置(用 opencode 默认解析,已知会挂起)"}`)
+
+      // 自动派发器仅主实例装配（写都串行到主实例，次要实例派发会双派）
+      if (arb.primary) {
+        dispatcher = initDispatcher(
+          {
+            session: ctx.session as never,
+            storage: ctx.storage,
+            projectID,
+            // worker 会话必须在项目目录里工作；不传 location 会回退到服务进程 cwd
+            // （实测曾落到 .debug/playground，worker 根本不在用户项目里）
+            directory: ctx.location.directory,
+            ...(taskboardModel ? { model: taskboardModel } : {}),
+          },
+          {
+            store: arb.store,
+            log,
+            onWrite: (fn) => (hooks.onWrite = fn),
+            // recordUsage 走 store 层、不经 HTTP 路由，故 emitSnapshot 不会触发；
+            // 消耗统计要上看板必须由这里显式广播快照
+            broadcast: async () => {
+              await arb.handle.emit({
+                type: "snapshot",
+                tasks: await arb.store.list(),
+                settings: await arb.store.getSettings(),
+              })
+            },
+          },
+        )
+      }
+
+      await safeRegister(arb.handle, [
+        () => registerTools(ctx as never, arb.store),
+        () =>
+          registerCommands(ctx as never, arb.store, {
+            port: arb.primaryPort,
+            dispatcherText: dispatcher
+              ? () => {
+                  const st = dispatcher.status()
+                  if (st.state === "disabled") return "🤖 自动领取：关（网页看板右上角开关可开启）"
+                  const label = { idle: "空闲", cooldown: `冷却中（剩 ${Math.round(st.cooldownRemainMs / 1000)}s）`, paused: "已暂停（连续失败）", disabled: "关" }[st.state]
+                  return `🤖 自动领取：${label}（今日 ${st.todayCount} 次${st.failStreak > 0 ? `，连败 ${st.failStreak}` : ""}）`
+                }
+              : undefined,
+          }),
+      ])
     } catch (e) {
       liveHub.dispose()
       throw e
     }
-    log(`就绪：${arb.primary ? "主实例" : "次要实例"} board=http://127.0.0.1:${arb.primaryPort}/`)
-
-    // worker 会话模型:opencode 对无 model 的后台会话创建即挂起(回合永不启动),
-    // 必须显式指定。来源:环境变量 TASKBOARD_MODEL(推荐,daemon 环境继承)> opencode.json 的 plugin.taskboard.model。
-    const pluginOptions = (rawOpts as { plugin?: { taskboard?: { model?: string } } }).plugin?.taskboard
-    const taskboardModelSpec = process.env.TASKBOARD_MODEL ?? pluginOptions?.model ?? (rawOpts as { model?: string }).model
-    const taskboardModel = taskboardModelSpec
-      ? (() => {
-          const idx = taskboardModelSpec.indexOf("/")
-          return idx > 0
-            ? {
-                providerID: taskboardModelSpec.slice(0, idx),
-                id: taskboardModelSpec.slice(idx + 1),
-              }
-            : undefined
-        })()
-      : undefined
-    if (taskboardModelSpec && !taskboardModel) log(`TASKBOARD model 配置格式错误(应为 provider/model):${taskboardModelSpec}`)
-    log(`插件 options: ${JSON.stringify(rawOpts)} | worker model: ${taskboardModel ? taskboardModelSpec : "未配置(用 opencode 默认解析,已知会挂起)"}`)
-
-    // 自动派发器仅主实例装配（写都串行到主实例，次要实例派发会双派）
-    let dispatcher: ReturnType<typeof initDispatcher> | null = null
-    if (arb.primary) {
-      dispatcher = initDispatcher(
-        {
-          session: ctx.session as never,
-          storage: ctx.storage,
-          projectID,
-          // worker 会话必须在项目目录里工作；不传 location 会回退到服务进程 cwd
-          // （实测曾落到 .debug/playground，worker 根本不在用户项目里）
-          directory: ctx.location.directory,
-          ...(taskboardModel ? { model: taskboardModel } : {}),
-        },
-        {
-          store: arb.store,
-          log,
-          onWrite: (fn) => (hooks.onWrite = fn),
-          // recordUsage 走 store 层、不经 HTTP 路由，故 emitSnapshot 不会触发；
-          // 消耗统计要上看板必须由这里显式广播快照
-          broadcast: async () => {
-            await arb.handle.emit({
-              type: "snapshot",
-              tasks: await arb.store.list(),
-              settings: await arb.store.getSettings(),
-            })
-          },
-        },
-      )
-    }
-
-    await safeRegister(arb.handle, [
-      () => registerTools(ctx as never, arb.store),
-      () =>
-        registerCommands(ctx as never, arb.store, {
-          port: arb.primaryPort,
-          dispatcherText: dispatcher
-            ? () => {
-                const st = dispatcher.status()
-                if (st.state === "disabled") return "🤖 自动领取：关（网页看板右上角开关可开启）"
-                const label = { idle: "空闲", cooldown: `冷却中（剩 ${Math.round(st.cooldownRemainMs / 1000)}s）`, paused: "已暂停（连续失败）", disabled: "关" }[st.state]
-                return `🤖 自动领取：${label}（今日 ${st.todayCount} 次${st.failStreak > 0 ? `，连败 ${st.failStreak}` : ""}）`
-              }
-            : undefined,
-        }),
-    ])
 
     return () => {
       dispatcher?.dispose()
