@@ -42,10 +42,10 @@ src/live.ts（新模块，纯读）
   └─ 合帧缓冲：per 会话 150ms 定时 flush
       ▼
 GET /api/tasks/:id/context/live（新增 SSE 端点，独立于 /api/events）
-  ├─ frame: text-append  { messageID, text }     ← 追加到该 assistant 消息
-  ├─ frame: part-update  { messageID, part }     ← 归一化 part（工具状态等）
-  ├─ frame: message-end  { messageID }           ← 该消息流式结束
-  └─ frame: ping                                        ← 25s 心跳
+  ├─ frame: text-append { kind, messageID, text }  ← 追加到该消息的 text/reasoning part
+  ├─ frame: content      { messageID, parts[] }    ← 权威整体替换该消息 parts
+  ├─ frame: message-end  { messageID | null }      ← 该消息（或全部）流式结束
+  └─ frame: ping                                   ← 25s 心跳（SSE 注释帧）
       ▼
 ContextView.svelte：标签页激活时开 EventSource
   ├─ 正常：text 纯文本追加（流式期间不渲染 markdown），message-end 后整体切 markdown
@@ -61,14 +61,17 @@ ContextView.svelte：标签页激活时开 EventSource
   live-only 契约下重连代价高）。插件卸载（cleanup）时整体取消。
 - **观看者注册表**：`Map<sessionID, { viewers: Set<response>, buf: DeltaBuffer }>`.
   SSE 响应关闭（`request.signal` abort）即减 refcount。
-- **合帧器**（纯函数，可单测）：`createDeltaBuffer(flushMs)`，`push(delta)` / `flush(): string | null`。
-  按 `(messageID, ordinal)` 分桶拼文本；flush 产出 `text-append` 帧。
+- **合帧器**（纯函数，可单测）：`createDeltaBuffer()`，`push(kind, messageID, text)` /
+  `flush(): LiveFrame[]`。按 `(kind, messageID)` 分桶拼文本；flush 产出 `text-append` 帧。
 - **事件归一化**（纯函数，可单测）：总线事件 → 帧 | null。
-  - `session.text.delta` → 拼 buffer（不立即发帧）
-  - `session.tool.called/progress/success/failed` → `part-update`（复用 context.ts 的
-    `normalizePart` 归一化 tool part，输出形态与快照一致）
-  - `session.message.content.updated` → `message-end`（assistant 消息完整信号）
-  - `session.execution.succeeded/failed` → `message-end`（无 content.updated 时的兜底）
+  - `session.text.delta` / `session.reasoning.delta` → 拼 buffer（不立即发帧）
+  - `session.message.content.updated` → `content` 帧（该消息 parts 的**权威快照**：
+    复用 context.ts 的 `normalizePart` 归一化）。**工具名与工具输出只在此事件里**
+    （`session.tool.*` 事件不带工具名，实测；其输出在 `state.content` 数组而快照在
+    `state.output`），故不单独转发 `session.tool.*`。归一化后 parts 为空、或 messageID
+    缺失 → **不产帧**（返回 null 即丢弃）。
+  - `session.execution.succeeded/failed` → `message-end`（messageID=null，收尾所有流式占位；
+    `session.idle` 实测不触发，不作信号）
   - 其余事件 → null
 - **背压**：每帧 enqueue 前查 `controller.desiredSize`，< 0 则丢弃该帧并标记该观看者
   「脏」，其下次重连时靠快照收敛（不累积队列）。
@@ -85,8 +88,8 @@ ContextView.svelte：标签页激活时开 EventSource
 
 - `lib/live-context.ts`（纯函数 + 事件应用逻辑，进 `webapp/test/`）：
   - `applyFrame(messages, frame)` → 新 messages：`text-append` 找到目标 assistant 消息的
-    text part 追加（无则创建流式占位 part）；`part-update` 按 part 身份替换/插入；
-    `message-end` 给消息打「可渲染 markdown」标记。
+    text/reasoning part 追加（无则创建流式占位 part）；`content` **整体替换**该消息 parts
+    （权威快照）；`message-end` 给消息打「可渲染 markdown」标记。
   - 流式中的 text part 渲染为纯文本 + 光标态；`message-end` 后才走 `Markdown.svelte`
     （避免逐帧 markdown 解析；实测 chunk 粒度下每秒 ≤10 帧纯文本追加，无压力）。
 - `ContextView.svelte`：标签页激活 → 先拉现有快照 → 开 EventSource 应用增量；
@@ -108,11 +111,16 @@ ContextView.svelte：标签页激活时开 EventSource
 `messageID` 即快照消息 `id`（同源 msg_ 前缀），对齐关系：
 
 - assistant 消息的 text/reasoning：增量只追加到**最后一个** text/reasoning part；
-  `part-update` 的归一化 part 形态与快照 parts 完全一致（同一 `normalizePart`）。
+  `content` 帧的归一化 part 形态与快照 parts **同源**（同一 `normalizePart`），但存在
+  两处数据源差异（可接受，非缺陷）：
+  1. 工具**输出**：live 侧从事件 `state.content[]` 的 text 条目拼出，快照侧是 `state.output`；
+     file 类工具的 live 输出只能给 `[文件: 名]` 引用行（事件只带 uri/mime/name，无正文）。
+  2. error 态工具：live 侧可能合成 output 字段，快照侧无此字段（36/36 error part 均无 output）。
 - 两侧的截断策略：增量文本在**前端**追加不受 8KB 截断影响，`message-end` 后下一次
   快照重拉会重新截断——可接受（截断是展示层语义）。
 - 用户的 `message-end` 兜底可能早于 SQLite 落库（两侧时钟差毫秒级）：重拉快照以
   `total`/消息数对比，无变化不重渲染（keyed each 已保证）。
+- 两侧都不展示工具**错误详情**（`normalizePart` 不读 `state.error`）——既有行为，不在本功能范围。
 
 ## 6. 错误处理
 
