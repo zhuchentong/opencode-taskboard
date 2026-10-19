@@ -1,6 +1,7 @@
 // 全前端唯一 API 入口：统一 token 头、JSON 体与错误解析。
 // 非 2xx 一律抛 BoardApiError（code 取服务端 error.code，缺省 "unknown"）。
 import type { BoardSettings, Project, Task } from "./types"
+import type { FsListing } from "./fsbrowse"
 
 declare global {
   interface Window {
@@ -73,6 +74,14 @@ export function updateProject(id: string, patch: { name?: string; workspace?: st
 
 export function deleteProject(id: string): Promise<void> {
   return request<void>(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" })
+}
+
+/** 列目录（项目工作区选路径的数据源）；不传 path 则服务端列用户 HOME */
+export function listDir(path?: string): Promise<FsListing> {
+  const q = new URLSearchParams()
+  if (path !== undefined) q.set("path", path)
+  const qs = q.toString()
+  return request<FsListing>(`/api/fs/ls${qs ? `?${qs}` : ""}`)
 }
 
 /** 可用模型清单(worker 阶段模型下拉数据源);服务端不可用时返回空,组件退化提示 */
