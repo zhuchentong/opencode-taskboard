@@ -208,3 +208,34 @@ git commit -m "feat: 📂 项目工作区目录选择器——浏览/跳转/回�
 ## 归档说明
 
 本计划当前存于 `/home/zhuchentong/.opencode/plan/`（plan mode 约束）。实施开始时将本文件复制到仓库惯例位置 `docs/superpowers/plans/2026-10-19-project-directory-picker.md` 并随 Task 1 首次提交入库。
+
+---
+
+## 执行记录（2026-10-19，Native 执行）
+
+提交：`392a874` 服务端 API → `d507f98` 前端数据层 → `cd6789a` 卡片化 → `d562080` 目录选择器 → `7ccf527` 审查修复。基线 `ce95ae3`（421 pass / 0 fail），收尾 435 pass / 0 fail。
+
+### 实施 rulings
+
+- Task 2：`parentOf` 不用 `node:path`，改为手写 POSIX 切分——浏览器 bundle 无 node 内置模块。代价：仅 POSIX（服务端 `isAbsolute` 同此约束）。
+- Task 2：`FsEntry`/`FsListing` 放 `fsbrowse.ts`，`api.ts` 以 `import type` 消费——避免运行时循环导入（`fsbrowse` 运行时 import `BoardApiError`）。代价：类型与 `types.ts` 分置（见延后项 M-9）。
+- Task 4：回调 prop 命名 `onpick`（计划写 `onPick`）——对齐本仓 `onchanged` 惯例。代价：零。
+
+### 审查修复（Important 全部修完，Minor 全部延后）
+
+- I-1「重试」重载旧目录 → 抽纯函数 `retryTarget(input, listing)`（用户输入优先，其次上次目录），`webapp/test/fsbrowse.test.ts` 3 例钉住。
+- I-2 `FS_LIST_CAP` 只截响应不截工作量 → `readdir(withFileTypes)` 类型短路，仅 symlink 才 `stat`；实测 `/usr/lib` 135-159ms → 89-98ms，`/usr/bin` 80-84ms → 17-18ms，响应内容不变。
+- I-3 用例名声称覆盖「缺省 HOME」而 `home` 零断言 → 补 `home` 与无参请求断言，并以变异验证（`homedir()` → `process.cwd()` 变红、还原转绿）证明断言吃得住。
+- 另：注释如实记录新增未鉴权面（本机目录名枚举）。
+
+### 延后的 Minor（不修，留待后续）
+
+M-1 `Awaited<ReturnType<typeof readdir>>` 标注实为自我断言（bun 不做类型检查，运行时无碍）· M-2 `ENOTDIR` 报 404「目录不存在」文案略偏（计划已钉该映射）· M-3 并发导航无请求序号守卫（慢请求后到会覆盖后请求，概率低）· M-4 `parentOf` 为死导出（服务端已下发 `parent`）· M-5 测试临时目录断言失败时无兜底清理 · M-6 服务端与前端各排一次序（前端重排是防御性，建议补注释）· M-7 嵌套 Dialog 焦点归还与双层遮罩观感需实机确认 · M-8 计划勾选状态（已回填）· M-9 `FsListing` 类型与 `types.ts` 分置。
+
+### 既有 flaky（非本次引入）
+
+`test/server-sse.test.ts`「第 33 个连接 503」偶发失败（1/7 全量跑）。根因：`handleEvents` 的 fire-and-forget 块在 `enqueue`/`emitSnapshot` 抛错时 `removeSubscriber`，未被读取的流被客户端回收即提前摘除订阅。本次对 `src/server.ts` 纯增量、未触碰 SSE 逻辑，基线 8 次未复现。治本方式：在用例里显式读取每条流的 `hello` 帧。
+
+### 待人工确认
+
+像素级目检（卡片布局、嵌套 Dialog 焦点归还、描述两行截断）需浏览器确认——CLI 代理已用编译通过 + 产物入包 + 真实 HTTP 端到端（列目录 → 建项目 → 删除）代证。
