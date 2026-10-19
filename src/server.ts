@@ -279,13 +279,14 @@ export function createServer(
     }
     let controller!: ReadableStreamDefaultController<Uint8Array>
     let detached = false
-    let detach!: () => void
+    let detach: (() => void) | undefined
     // 收尾：反注册 hub 观看者 + 摘掉流守护。detached 守卫保证 detach 恰一次——
     // cancel 与 abort 事件会竞争触发，send 失败也可能踩在 teardown 之后
     const cleanup = () => {
       if (detached) return
       detached = true
-      detach()
+      // detach 在下方 subscribeLive 返回后才赋值；若注入方挂载期间同步调 send 且踩中 cleanup，此刻尚无值
+      detach?.()
       removeLiveWatcher(watcher)
     }
     const send = (frame: LiveFrame): void => {

@@ -1,10 +1,12 @@
 // 实时上下文 SSE 路由（/api/tasks/:id/context/live）的行为守护：
-// 复用 test/server-sse.test.ts 的 setup/SseReader 模式，经注入的 subscribeLive 假源驱动帧。
+// 复用 test/server-sse.test.ts 的 setup 模式，SseReader 用共享 helper（test/helpers/sse-reader.ts），
+// 经注入的 subscribeLive 假源驱动帧。
 import { afterEach, describe, expect, test } from "bun:test"
 import { createStore, memoryBackend } from "../src/store"
 import { createServer, type ServerHandle } from "../src/server"
 import type { LiveFrame } from "../src/live"
 import type { Store } from "../src/types"
+import { SseReader } from "./helpers/sse-reader"
 
 const FIXDIR = "test/.webroot-fixture"
 
@@ -34,62 +36,6 @@ async function claimedTask(s: Store, sessionID: string) {
   return t
 }
 
-/** 逐帧读取 SSE 流，nextEvent 返回下一条 data 事件（跳过 `: ping` 等注释帧） */
-class SseReader {
-  private reader: ReadableStreamDefaultReader<Uint8Array>
-  private buf = ""
-  private decoder = new TextDecoder()
-
-  constructor(res: Response) {
-    this.reader = (res.body as ReadableStream<Uint8Array>).getReader()
-  }
-
-  async nextEvent(timeoutMs = 3000): Promise<LiveFrame> {
-    const deadline = Date.now() + timeoutMs
-    for (;;) {
-      const idx = this.buf.indexOf("\n\n")
-      if (idx >= 0) {
-        const frame = this.buf.slice(0, idx)
-        this.buf = this.buf.slice(idx + 2)
-        const data = frame
-          .split("\n")
-          .filter((l) => l.startsWith("data:"))
-          .map((l) => l.slice(5).trimStart())
-          .join("\n")
-        if (!data) continue // 注释帧（心跳）无 data 行
-        return JSON.parse(data) as LiveFrame
-      }
-      const remaining = deadline - Date.now()
-      if (remaining <= 0) throw new Error("等待 SSE 事件超时")
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("等待 SSE 事件超时")), remaining)
-        this.reader
-          .read()
-          .then((r) => {
-            clearTimeout(timer)
-            if (r.done) {
-              reject(new Error("SSE 流意外结束"))
-            } else {
-              this.buf += this.decoder.decode(r.value, { stream: true })
-              resolve()
-            }
-          })
-          .catch((e) => {
-            clearTimeout(timer)
-            reject(e instanceof Error ? e : new Error(String(e)))
-          })
-      })
-    }
-  }
-
-  /** 等待流关闭：下一次 read 应 done；超时仍未关返回 false */
-  async closedWithin(timeoutMs = 3000): Promise<boolean> {
-    const done = this.reader.read().then((r) => r.done)
-    const timer = new Promise<false>((resolve) => setTimeout(() => resolve(false), timeoutMs))
-    return Promise.race([done, timer])
-  }
-}
-
 /** detach 等服务端副作用是连接关闭后异步传播的：短暂轮询直到条件满足（同 server-sse 的 expectReconnectOk） */
 async function expectEventually(check: () => boolean, msg: string, timeoutMs = 2000): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -113,7 +59,7 @@ describe("实时上下文 SSE 路由", () => {
     const res = await fetch(`${base}/api/tasks/${t.id}/context/live`)
     expect(res.status).toBe(200)
     expect(res.headers.get("Content-Type")).toContain("text/event-stream")
-    const reader = new SseReader(res)
+    const reader = new SseReader<LiveFrame>(res)
     push({ type: "message-end", messageID: null })
     expect(await reader.nextEvent()).toEqual({ type: "message-end", messageID: null })
   })
@@ -129,7 +75,7 @@ describe("实时上下文 SSE 路由", () => {
 
     const res = await fetch(`${base}/api/tasks/${t.id}/context/live`)
     expect(res.status).toBe(200)
-    const reader = new SseReader(res)
+    const reader = new SseReader<LiveFrame>(res)
     expect(await reader.nextEvent()).toEqual({ type: "message-end", messageID: null })
     expect(await reader.closedWithin()).toBe(true) // 前端据此不重试
     expect(attachCalls).toBe(0) // 无会话不挂观看者
@@ -175,5 +121,30 @@ describe("实时上下文 SSE 路由", () => {
     // 服务端未受影响，后续请求照常响应
     const after = await fetch(`${base}/api/health`)
     expect(after.status).toBe(200)
+  })
+
+  test("未知任务 id → 404 not_found（StoreError 映射，与 context 路由同路径）", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    const base = setup(s)
+    const r = await fetch(`${base}/api/tasks/task_nope/context/live`)
+    expect(r.status).toBe(404)
+    expect(((await r.json()) as { error: { code: string } }).error.code).toBe("not_found")
+  })
+
+  test("观看者触顶：第 33 个 live 连接返回 503 too_many_subscribers", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    const base = setup(s, () => () => {})
+    const t = await claimedTask(s, "s1")
+
+    const ctrls: AbortController[] = []
+    for (let i = 0; i < 32; i++) {
+      const ctrl = new AbortController()
+      ctrls.push(ctrl)
+      expect((await fetch(`${base}/api/tasks/${t.id}/context/live`, { signal: ctrl.signal })).status).toBe(200)
+    }
+    const overflow = await fetch(`${base}/api/tasks/${t.id}/context/live`)
+    expect(overflow.status).toBe(503)
+    expect(((await overflow.json()) as { error: { code: string } }).error.code).toBe("too_many_subscribers")
+    for (const ctrl of ctrls) ctrl.abort()
   })
 })

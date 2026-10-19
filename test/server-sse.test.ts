@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { createStore, memoryBackend } from "../src/store"
 import { createServer, type ServerEvent, type ServerHandle } from "../src/server"
 import type { Store } from "../src/types"
+import { SseReader } from "./helpers/sse-reader"
 
 const FIXDIR = "test/.webroot-fixture"
 
@@ -24,55 +25,6 @@ function setup(store: Store) {
 }
 
 const H = { "X-Taskboard-Token": "tok123", "Content-Type": "application/json" }
-
-/** 逐帧读取 SSE 流，nextEvent 返回下一条 data 事件（跳过 `: ping` 等注释帧） */
-class SseReader {
-  private reader: ReadableStreamDefaultReader<Uint8Array>
-  private buf = ""
-  private decoder = new TextDecoder()
-
-  constructor(res: Response) {
-    this.reader = (res.body as ReadableStream<Uint8Array>).getReader()
-  }
-
-  async nextEvent(timeoutMs = 3000): Promise<ServerEvent> {
-    const deadline = Date.now() + timeoutMs
-    for (;;) {
-      const idx = this.buf.indexOf("\n\n")
-      if (idx >= 0) {
-        const frame = this.buf.slice(0, idx)
-        this.buf = this.buf.slice(idx + 2)
-        const data = frame
-          .split("\n")
-          .filter((l) => l.startsWith("data:"))
-          .map((l) => l.slice(5).trimStart())
-          .join("\n")
-        if (!data) continue // 注释帧（心跳）无 data 行
-        return JSON.parse(data) as ServerEvent
-      }
-      const remaining = deadline - Date.now()
-      if (remaining <= 0) throw new Error("等待 SSE 事件超时")
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("等待 SSE 事件超时")), remaining)
-        this.reader
-          .read()
-          .then((r) => {
-            clearTimeout(timer)
-            if (r.done) {
-              reject(new Error("SSE 流意外结束"))
-            } else {
-              this.buf += this.decoder.decode(r.value, { stream: true })
-              resolve()
-            }
-          })
-          .catch((e) => {
-            clearTimeout(timer)
-            reject(e instanceof Error ? e : new Error(String(e)))
-          })
-      })
-    }
-  }
-}
 
 function assertSnapshot(e: ServerEvent, msg: string): { tasks: { id: string; title: string }[]; settings: unknown } {
   if (e.type !== "snapshot") throw new Error(`${msg}：期望 snapshot 事件，实际 ${e.type}`)
@@ -106,7 +58,7 @@ describe("SSE 事件流", () => {
     expect(res.status).toBe(200)
     expect(res.headers.get("Content-Type")).toContain("text/event-stream")
 
-    const reader = new SseReader(res)
+    const reader = new SseReader<ServerEvent>(res)
     expect(await reader.nextEvent()).toEqual({ type: "hello" })
     const init = assertSnapshot(await reader.nextEvent(), "连接快照")
     expect(init.tasks).toEqual([])
