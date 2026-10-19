@@ -6,6 +6,9 @@
 // - 不可变：始终返回新数组与新消息对象，不改入参——前端用 Svelte 5 的 $state 持有列表，
 //   就地改会漏掉响应式更新。
 // - 顺序：快照消息是时间倒序（最新在前），实时新建的消息也插到头部，两侧顺序一致。
+// - 流式态统一模型：任何实时帧触及某消息即置 streaming=true（渲染层据此用纯文本而非
+//   markdown），只有 message-end 才定格。服务端保证 text-append 排在 message-end 之前
+//   （见 src/live.ts 收尾时先冲刷 delta 缓冲），帧序倒了消息会卡在流式态。
 import type { ContextMessage } from "./context"
 
 /** 看板消费的实时帧：文本增量 / 整段内容 / 消息结束（与服务端 src/live.ts 逐字对齐） */
@@ -14,15 +17,22 @@ export type LiveFrame =
   | { type: "content"; messageID: string; parts: ContextMessage["parts"] }
   | { type: "message-end"; messageID: string | null }
 
-/** 不可变应用一帧：返回新数组；新消息 unshift 头部（快照时间倒序），既有消息按 id 原位替换 */
-export function applyFrame(messages: ContextMessage[], frame: LiveFrame): ContextMessage[] {
+/**
+ * 不可变应用一帧：返回新数组；新消息 unshift 头部（快照时间倒序），既有消息按 id 原位替换。
+ * @param now 新建消息的时间戳来源（默认本地时钟；注入后函数对同一入参结果确定）
+ */
+export function applyFrame(messages: ContextMessage[], frame: LiveFrame, now: number = Date.now()): ContextMessage[] {
   switch (frame.type) {
     case "text-append":
-      return applyTextAppend(messages, frame)
+      return applyTextAppend(messages, frame, now)
     case "content":
-      return applyContent(messages, frame)
+      return applyContent(messages, frame, now)
     case "message-end":
       return applyMessageEnd(messages, frame.messageID)
+    default:
+      // 帧来自 JSON 解析：镜像类型一旦与服务端脱节（服务端加了新帧型），此处不产变化，
+      // 免得下游拿到非数组把 $state 弄崩
+      return messages
   }
 }
 
@@ -30,6 +40,7 @@ export function applyFrame(messages: ContextMessage[], frame: LiveFrame): Contex
 function applyTextAppend(
   messages: ContextMessage[],
   frame: Extract<LiveFrame, { type: "text-append" }>,
+  now: number,
 ): ContextMessage[] {
   const idx = messages.findIndex((m) => m.id === frame.messageID)
   if (idx === -1) {
@@ -38,7 +49,7 @@ function applyTextAppend(
       {
         id: frame.messageID,
         role: "assistant",
-        time: Date.now(),
+        time: now,
         parts: [{ type: frame.kind, text: frame.text }],
         streaming: true,
       },
@@ -66,6 +77,7 @@ function applyTextAppend(
 function applyContent(
   messages: ContextMessage[],
   frame: Extract<LiveFrame, { type: "content" }>,
+  now: number,
 ): ContextMessage[] {
   const idx = messages.findIndex((m) => m.id === frame.messageID)
   if (idx === -1) {
@@ -74,7 +86,7 @@ function applyContent(
       {
         id: frame.messageID,
         role: "assistant",
-        time: Date.now(),
+        time: now,
         parts: [...frame.parts],
         streaming: true,
       },
@@ -82,8 +94,8 @@ function applyContent(
     ]
   }
   const next = [...messages]
-  // 只换 parts，streaming 标记保持原样：content 帧不代表该消息已结束
-  next[idx] = { ...next[idx], parts: [...frame.parts] }
+  // 实时帧触及即在途输出：与 text-append 同一模型，统一置流式态，等 message-end 才定格
+  next[idx] = { ...next[idx], parts: [...frame.parts], streaming: true }
   return next
 }
 
