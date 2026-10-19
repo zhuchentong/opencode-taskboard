@@ -29,6 +29,16 @@
 4. 任务无会话（未领取/human claim `sessionID: null`）→ 服务端立即 message-end 关流，前端不得重试风暴（任务 3 与任务 6 测试钉住）
 5. 慢消费者把 SSE 队列挤爆（`desiredSize < 0`）→ 必须 detach 该观看者，绝不累积队列（任务 3 测试钉住）
 
+## 执行期修订（2026-10-20，任务 1-5 审查裁决）
+
+本节记录执行期对计划正文的裁决（任务 6/7 的简报从本文件生成，务必连同这些修订一起读）：
+
+1. **服务端帧序（任务 2/5 跨任务）**：hub 在 `session.execution.succeeded/failed` 时**先冲刷该会话 delta 缓冲、再广播 `message-end(null)`**——结束信号必须排在文本之后，否则前端把消息定格后又被迟到的 `text-append` 置回流式态且永不定格。
+2. **回合结束态不变量（任务 5）**：hub 按会话记结束态；`session.execution.started` 复位；结束态为真时到达的帧**照常广播并紧跟一条 `message-end`**（内容不丢、帧序以 message-end 收尾）。
+3. **前端 streaming 统一模型（任务 5）**：任何实时帧（`text-append`/`content`）触及某消息即置 `streaming:true`；只有 `message-end` 定格。（原「content 对既有消息保留原样」作废。）
+4. **前端 `applyFrame` 签名（任务 5）**：增可选第三参 `now: number = Date.now()`，并加 `default` 分支返回原数组。
+5. **规格 §6 的订阅死亡处置（任务 5 复审发现）**：订阅流结束/异常时，服务端须给**所有活跃观看者**补发 `message-end`（否则看板静默冻在「实时」状态），并清理结束态。
+
 ---
 
 ### 任务 1：delta 合帧器与 content 归一化（纯函数）
@@ -493,12 +503,13 @@ test("text-append 追加到最后一个 text part；无则创建占位并标记 
   expect(created[0]!.parts).toEqual([{ type: "reasoning", text: "思" }])
 })
 
-test("content 帧整体替换该消息 parts（权威快照），streaming 标记保留", () => {
+test("content 帧整体替换该消息 parts（权威快照），并置 streaming", () => {
   const msgs = applyFrame(
     [M("m1", [{ type: "text", text: "旧" }])],
     { type: "content", messageID: "m1", parts: [{ type: "tool", tool: "bash", state: "completed", output: "ok" }] },
   )
   expect(msgs[0]!.parts).toEqual([{ type: "tool", tool: "bash", state: "completed", output: "ok" }])
+  expect(msgs[0]!.streaming).toBe(true)
 })
 
 test("message-end(null) 全部定格；message-end(id) 仅该消息", () => {
@@ -536,8 +547,14 @@ export type LiveFrame =
   | { type: "content"; messageID: string; parts: ContextMessage["parts"] }
   | { type: "message-end"; messageID: string | null }
 
-/** 不可变应用一帧：返回新数组；新消息 unshift 头部（快照时间倒序），既有消息按 id 原位替换 */
-export function applyFrame(messages: ContextMessage[], frame: LiveFrame): ContextMessage[]
+/** 不可变应用一帧：返回新数组；新消息 unshift 头部（快照时间倒序），既有消息按 id 原位替换
+ *  统一模型：任何实时帧触及某消息即置 streaming=true；只有 message-end 才定格
+ *  未知帧类型返回原数组（default 兜底）；now 可注入以消除读时钟的隐性副作用 */
+export function applyFrame(
+  messages: ContextMessage[],
+  frame: LiveFrame,
+  now: number = Date.now(),
+): ContextMessage[]
 ```
 
 `webapp/src/lib/context.ts` 的 `ContextMessage` 追加字段：`/** 实时流式中：text/reasoning part 以纯文本渲染，message-end 后切 markdown */ streaming?: boolean`
@@ -678,3 +695,67 @@ git commit -m "feat: 🖥️ 上下文标签实时接线——打字机渲染、
 - `bun test` 全量 PASS（唯一验收门）
 - `git log --oneline` 七个提交、`src/web/` 产物与 `webapp/` 改动同在最后一个提交
 - 删除一次性探针目录 `.debug/spike-live/`、`.debug/spike-live2/`（gitignore 内，删不删都不影响仓库）
+
+---
+
+# 执行进度与交接（2026-10-20 暂停）
+
+分支 `feat/live-context-stream`（从 `master@50144ac` 拉出）。规格：
+`docs/superpowers/specs/2026-10-19-live-context-stream-design.md`。
+
+## 一、状态总览：7 个任务完成 5 个
+
+| 任务 | 状态 | 提交 |
+|------|------|------|
+| 0 基线 | ✅ | `50144ac`（上一轮会话遗留的「上下文标签」在途工作，作为基线提交以隔离本计划 diff） |
+| 1 数据层（合帧器 + content 归一化） | ✅ 审查干净（1 轮修复） | `f62bf55` `c0035df` |
+| 2 枢纽 createLiveHub | ✅ 审查干净（1 轮修复） | `9fd75f9` `5557144` |
+| 3 SSE 路由 `/api/tasks/:id/context/live` | ✅ 审查干净（1 轮修复） | `b9eadb9` `1a218b9` |
+| 4 index.ts 装配 | ✅ 审查干净（1 轮修复） | `dcc7c1e` `551176e` |
+| 5 前端 applyFrame | ⚠️ **第 2 轮修复已实施，复审待做** | `aeb7347` `00957c3` `a63da03` `104c727` `9a66d23` |
+| 6 connectLiveContext 订阅状态机 | ⬜ 未开始 | — |
+| 7 ContextView 接线 + 产物 + 验收 | ⬜ 未开始 | — |
+| 终审（宽范围审查）+ finishing-a-development-branch | ⬜ 未开始 | — |
+
+附带：`d2433eb` 规格帧词汇修订（见上文「执行期修订」）。
+
+**测试状态**：根 `bun test` → 510 pass / 0 fail；前端 `cd webapp && bun test` → 139 pass / 0 fail。
+
+## 二、恢复执行的入口
+
+1. **账本**（本机，gitignore，勿删）：`.superpowers/sdd/2026-10-19-live-context-stream/progress.md`
+   —— 含逐任务裁决与遗留 Minor 清单。上下文压缩后以它与 `git log` 为准，不要凭记忆。
+2. **任务 6 简报**：
+   `bash <superpowers>/skills/subagent-driven-development/scripts/task-brief docs/superpowers/plans/2026-10-19-live-context-stream.md 6`
+3. **模型**：后续任务统一 `minimax-cn-coding-plan/MiniMax-M3.1-Flash`（用户 2026-10-20 指令，覆盖原分层安排）。
+4. **待办顺序**：① 任务 5 第 2 轮修复的定向复审（FIX_BASE=`104c727`，HEAD=`9a66d23`）→ ② 任务 6 → ③ 任务 7（含 dev 假事件源）→ ④ 宽范围终审 → ⑤ finishing-a-development-branch。
+5. **注意**：任务 6/7 的简报从本文件生成，**必须连同上文「执行期修订」5 条一起读**（否则会回退已修掉的 streaming 语义与帧序）。
+
+## 三、任务 5 第 2 轮修复（待复审）内容
+
+`9a66d23`：补规格 §6 缺口——订阅流结束/异常时给**所有活跃观看者**补发 `message-end` 并清结束态；
+重订阅成功时也清结束态。含 4 条新用例（根全量 510 pass）。
+
+## 四、我作出的裁决摘要（若判断有误，返工点在此）
+
+1. **规格帧词汇**：`part-update {messageID, part}` 作废，改为 `content {messageID, parts[]}`（权威整体替换）——理由：工具名与工具输出只存在于 `session.message.content.updated`，`session.tool.*` 不带工具名。代价：规格与早期计划文本需同步修订（已做 `d2433eb`）。
+2. **服务端帧序**：回合收尾先冲刷 delta 缓冲再广播 `message-end`——结束信号必须排在文本之后，否则消息永不定格。代价：跨任务改了 `src/live.ts`。
+3. **前端 streaming 统一模型**：任何实时帧触及某消息即置 `streaming:true`，只有 `message-end` 定格（原「content 对既有消息保留原样」作废）。代价：计划用例标题与断言更正。
+4. **回合结束态不变量**：迟到帧照常广播并紧跟一条 `message-end`（不丢内容、帧序以 message-end 收尾）。代价：hub 多两个状态结构。
+5. **规格 §6 订阅死亡处置**：给活跃观看者补发 `message-end`（否则看板静默冻在「实时」）。代价：hub 多一个跨会话广播。
+6. **计划缺陷·任务 2**：简报用例原为同步断言，消费 AsyncIterable 至少延迟一个微任务 → 任何实现都过不了；接受 `async` + `await tick()` 的最小机械修正（断言与事件序列逐字保留）。
+7. **计划缺陷·任务 3**：简报让复制 55 行 `SseReader` → 跨文件逐字重复；改为提取 `test/helpers/sse-reader.ts`（泛型 `SseReader<T>`），既有 server-sse 用例只改 import。
+8. **file 类工具输出**：live 侧只能给 `[文件: 名]` 引用行（事件只带 uri/mime/name）——数据源限制，接受，已写入规格 §5。
+9. **工具错误详情**：live 与快照两侧都不展示（`normalizePart` 不读 `state.error`）——范围外，既有行为。
+10. **dev 模式无 live 接线**：放到任务 7 补 dev 假事件源（否则任务 7 的手工验收会看到「live 流秒断」并误判装配失败）。
+11. **接受现状的遗留项**：合帧定时器随插件常驻（150ms 空转）；插件卸载时总线订阅不立即释放（挂到下一事件才释放，世代守卫已防迟到事件）；setup 失败时派发器定时器不被 dispose（既有行为）；任务 5 两条观感级 Minor（复位与迟到 delta 的时序竞态、复位后迟到 content 帧无补定格）。
+12. **帧协议不带 role**（实时新建消息一律 assistant）——交最终审查甄别，暂不改。
+
+## 五、遗留 Minor 清单（交宽范围终审甄别哪些必须合并前修掉）
+
+- file 类工具 live 输出为引用行，与快照正文不同；多 text 条目以 `\n` 连接，与快照非逐字相同；error 态工具 live 合成 output 而快照无此字段；空 text 块产出 `output:""`；半截 JSON 的 streaming 入参保持字符串
+- `removeLiveWatcher` 与 `removeSubscriber` 8 行同构（有意不动既有路径）
+- 任务 5 两条观感级时序 Minor（见上 11）
+- 帧协议不带 role
+- `applyFrame` 未知帧类型走 `default` 兜底（不崩但不产出）
+
