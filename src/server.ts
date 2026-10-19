@@ -5,6 +5,7 @@ import { homedir } from "node:os"
 import { StoreError } from "./types"
 import type { BoardSettings, Project, Store, Task } from "./types"
 import type { ContextPage, ContextReadInput } from "./context"
+import type { LiveFrame } from "./live"
 
 export type ServerEvent = { type: "hello" } | { type: "snapshot"; tasks: Task[]; settings: BoardSettings; projects: Project[] }
 
@@ -67,6 +68,8 @@ export function createServer(
     listModels?: () => Promise<string[]>
     /** 任务上下文分页读取(worker 会话消息;index 注入 context reader,测试可 mock);缺省路由返回空页 */
     readContext?: (input: ContextReadInput) => Promise<ContextPage>
+    /** 实时上下文流：注册观看者，返回 detach（index 注入 liveHub.attach，测试可 mock）；缺省路由走无会话分支 */
+    subscribeLive?: (sessionID: string, send: (frame: LiveFrame) => void) => () => void
     /** 每次写广播快照后异步触发（自动派发器等观察者）；携带快照任务列表（沿驱动实时消费），不影响响应 */
     onWrite?: (tasks: Task[]) => void
   },
@@ -172,6 +175,19 @@ export function createServer(
     }
   }
 
+  /** 实时流观看者：与 Subscriber 同构（心跳守护复用），独立集合——帧源是 live hub，不参与 emit 快照广播 */
+  const liveWatchers = new Set<Subscriber>()
+
+  function removeLiveWatcher(w: Subscriber): void {
+    if (!liveWatchers.delete(w)) return
+    clearInterval(w.heartbeat)
+    try {
+      w.controller.close()
+    } catch {
+      // 流已被客户端取消
+    }
+  }
+
   function emit(event: ServerEvent): void {
     for (const sub of subscribers) {
       try {
@@ -230,6 +246,90 @@ export function createServer(
       }
     })()
     if (req.signal.aborted) removeSubscriber(sub)
+    return new Response(stream, {
+      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+    })
+  }
+
+  /**
+   * 实时上下文流：把 live hub 推给本任务会话的帧经 SSE 转发给浏览器（「上下文」标签实时数据源）。
+   * 守护照抄 handleEvents（上限/25s 心跳/abort 反注册），但观看者独立集合，且纯读路径——
+   * 帧源是 subscribeLive 注入的 hub，绝不 emitSnapshot。
+   */
+  async function handleLive(req: Request, taskID: string): Promise<Response> {
+    const task = await store.get(taskID)
+    const sessionID = task.claim?.sessionID || null
+    // 无会话（未领取/human claim）或 hub 未接线：一帧 message-end 即关流，前端据此不重试
+    if (!sessionID || !opts.subscribeLive) {
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "message-end", messageID: null })}\n\n`))
+            c.close()
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } },
+      )
+    }
+    if (liveWatchers.size >= MAX_SSE_SUBSCRIBERS) {
+      return Response.json(
+        { error: { code: "too_many_subscribers", message: "事件流订阅已达上限，请稍后重试" } },
+        { status: 503 },
+      )
+    }
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    let detached = false
+    let detach!: () => void
+    // 收尾：反注册 hub 观看者 + 摘掉流守护。detached 守卫保证 detach 恰一次——
+    // cancel 与 abort 事件会竞争触发，send 失败也可能踩在 teardown 之后
+    const cleanup = () => {
+      if (detached) return
+      detached = true
+      detach()
+      removeLiveWatcher(watcher)
+    }
+    const send = (frame: LiveFrame): void => {
+      // 背压：desiredSize<0 说明消费端积压，丢帧并退订，绝不累积队列
+      if (controller.desiredSize !== null && controller.desiredSize < 0) {
+        cleanup()
+        return
+      }
+      try {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`))
+      } catch {
+        // 流已死：同步吞掉。异常冒出去会打进 hub 的 flush 定时器（那条路径没有 catch 兜底）
+        cleanup()
+      }
+    }
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        controller = c
+      },
+      cancel() {
+        cleanup()
+      },
+    })
+    const watcher: Subscriber = {
+      controller,
+      heartbeat: setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(": ping\n\n"))
+        } catch {
+          cleanup()
+        }
+      }, SSE_HEARTBEAT_MS),
+    }
+    detach = opts.subscribeLive(sessionID, send)
+    liveWatchers.add(watcher)
+    req.signal.addEventListener("abort", () => cleanup())
+    if (req.signal.aborted) cleanup()
+    try {
+      // 连接即发一帧注释帧冲刷响应头：本 Bun 版本下空流会扣住 headers 不发，客户端 fetch 不返回
+      // （与 handleEvents 连接即推 hello 同理）；注释帧对前端解析不可见，与心跳同款
+      controller.enqueue(encoder.encode(": ping\n\n"))
+    } catch {
+      cleanup()
+    }
     return new Response(stream, {
       headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
     })
@@ -358,6 +458,15 @@ export function createServer(
       const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 200) : 50
       const cursor = url.searchParams.get("cursor") ?? undefined
       return Response.json(await opts.readContext({ sessionID, cursor, limit }))
+    }
+    /**
+     * 实时上下文流（SSE）：worker 会话模型输出的帧推送。
+     * - 读路径无鉴权：与 context/tasks/logs/SSE 同姿态（127.0.0.1 绑定 + 写凭 token）；
+     * - 与既有 context 路由的正则靠 $ 锚点区分，互不遮蔽。
+     */
+    const ctxLiveMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/context\/live$/)
+    if (ctxLiveMatch && method === "GET") {
+      return handleLive(req, decodeURIComponent(ctxLiveMatch[1]))
     }
     if (pathname === "/api/claim" && method === "POST") {
       const bad = guard(req)
