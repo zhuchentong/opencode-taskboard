@@ -51,7 +51,7 @@ describe("派发器启动自举", () => {
       },
     }
     const store = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    await store.setSettings({ autoDispatch: true })
+    await store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     await toPending(store, "存量任务")
 
     const session = fakeSession()
@@ -85,7 +85,7 @@ describe("派发器启动自举", () => {
       },
     }
     const store = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    await store.setSettings({ autoDispatch: true })
+    await store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     // 不建任何任务
 
     const session = fakeSession()

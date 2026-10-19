@@ -30,6 +30,7 @@ const STATUS_BY_CODE: Record<string, number> = {
   invalid_input: 400,
   unreachable: 503,
   forbidden: 403,
+  model_not_configured: 409,
 }
 
 function errorResponse(e: unknown): Response {
@@ -268,6 +269,11 @@ export function createServer(
         const bad = guard(req)
         if (bad) return bad
         const body = await readJson(req)
+        // 建任务门禁:阶段模型未配齐一律拒绝(与网页门禁同语义,防绕过前端直调 API)
+        const settings = await store.getSettings()
+        if (!settings.modelAnalyze || !settings.modelExecute) {
+          throw new StoreError("model_not_configured", "请先在网页页头选择分析模型与执行模型,再创建任务")
+        }
         const task = await store.create({
           title: String(body.title ?? ""),
           description: body.description as string | undefined,

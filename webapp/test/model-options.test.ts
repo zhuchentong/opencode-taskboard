@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { groupModels, MODEL_PLACEHOLDER } from "../src/lib/model-options"
+import { groupModels, modelsConfigured } from "../src/lib/model-options"
 
 describe("模型下拉选项分组", () => {
   test("按 provider 分组,保持首现顺序,组内保持原顺序", () => {
@@ -23,8 +23,20 @@ describe("模型下拉选项分组", () => {
   })
 })
 
-describe("MODEL_PLACEHOLDER", () => {
-  test("空选项文案存在(「跟随 opencode 默认」)", () => {
-    expect(MODEL_PLACEHOLDER).toContain("默认")
+describe("modelsConfigured(模型门禁判定)", () => {
+  test("两模型都是非空字符串 → 已配置", () => {
+    expect(modelsConfigured({ modelAnalyze: "a/one", modelExecute: "b/two" })).toBe(true)
+  })
+
+  test("任一模型为 undefined 或空串 → 未配置", () => {
+    expect(modelsConfigured({ modelAnalyze: "a/one", modelExecute: undefined })).toBe(false)
+    expect(modelsConfigured({ modelAnalyze: undefined, modelExecute: "b/two" })).toBe(false)
+    expect(modelsConfigured({ modelAnalyze: "a/one", modelExecute: "" })).toBe(false)
+    expect(modelsConfigured({ modelAnalyze: "", modelExecute: "b/two" })).toBe(false)
+    expect(modelsConfigured({})).toBe(false)
+  })
+
+  test("旧数据兼容:全空对象(仅含其他字段)→ 未配置", () => {
+    expect(modelsConfigured({ modelAnalyze: undefined, modelExecute: undefined })).toBe(false)
   })
 })

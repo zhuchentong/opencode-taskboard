@@ -8,7 +8,7 @@
   import type { ConnState } from "$lib/api"
   import { DEFAULT_PROJECT_ID, type BoardSettings, type Project } from "$lib/types"
   import type { ThemeMode } from "../theme"
-  import { MODEL_PLACEHOLDER, groupModels } from "$lib/model-options"
+  import { modelsConfigured, groupModels } from "$lib/model-options"
   import { projectFilterOptions } from "$lib/project-options"
   import StatusDot from "./StatusDot.svelte"
   import ProjectsDialog from "./ProjectsDialog.svelte"
@@ -34,7 +34,7 @@
     conn: ConnState
     mode: ThemeMode
     modeLabel: string
-    /** 可用模型清单("provider/model" 行;/api/models 不可用时为空 → 下拉只留默认项+提示) */
+    /** 可用模型清单("provider/model" 行;/api/models 不可用时为空 → 下拉只剩占位+提示) */
     models: string[]
     /** 项目清单(快照事实源;建任务下拉与项目管理弹窗共用) */
     projects: Project[]
@@ -49,7 +49,7 @@
     oncreate: (title: string, description: string, projectId: string) => Promise<void>
     ontoggle: (requireAnalysisConfirm: boolean) => void
     ondispatch: (autoDispatch: boolean) => void
-    /** 阶段模型变更(phase 为设置字段名;空串=跟随 opencode 默认) */
+    /** 阶段模型变更(phase 为设置字段名;门禁:两模型都必选,无「跟随默认」) */
     onmodel: (phase: "modelAnalyze" | "modelExecute", value: string) => void
     /** 主题菜单选择（auto 跟随系统 / light 浅色 / dark 深色） */
     onsetmode: (mode: ThemeMode) => void
@@ -59,6 +59,7 @@
   let title = $state("")
   let description = $state("")
   let projectSel = $state(DEFAULT_PROJECT_ID)
+  const modelsReady = $derived(modelsConfigured(settings))
   const canSubmit = $derived(title.trim().length > 0)
   let submitting = $state(false)
   let projectsOpen = $state(false)
@@ -105,7 +106,13 @@
 <header class="sticky top-0 z-10 flex flex-wrap items-center gap-4 border-b bg-background px-4 py-2.5">
   <div class="flex min-w-0 items-center gap-3">
     <h1 class="whitespace-nowrap text-base font-semibold">任务看板</h1>
-    <Button size="sm" onclick={openCreate}>＋ 新建任务</Button>
+    <Button
+      size="sm"
+      onclick={openCreate}
+      disabled={!modelsReady}
+      title={modelsReady ? "新建任务" : "请先在右侧选择分析模型与执行模型"}>
+      ＋ 新建任务
+    </Button>
     <label
       class="inline-flex items-center gap-2 rounded-lg border border-border bg-card/40 px-3 py-1.5 whitespace-nowrap"
       title="按所属项目筛选看板卡片">
@@ -154,14 +161,14 @@
     </label>
     <label
       class="inline-flex items-center gap-2 rounded-lg border border-border bg-card/40 px-3 py-1.5 whitespace-nowrap"
-      title="分析阶段(领取/分析/重析回合)worker 会话使用的模型;「跟随默认」用 opencode 默认解析">
+      title="分析阶段(领取/分析/重析回合)worker 会话使用的模型;必须显式选择,未配置将阻止创建任务">
       <span class="text-[13px] font-medium">分析模型</span>
       <select
         bind:value={analyzeSel}
         onchange={() => onmodel("modelAnalyze", analyzeSel)}
         class="max-w-44 rounded-md border border-border bg-background px-1.5 py-1 text-[12px] text-foreground outline-none focus:ring-1 focus:ring-ring"
         aria-label="分析阶段模型">
-        <option value="">{MODEL_PLACEHOLDER}</option>
+        <option value="" disabled>请选择模型</option>
         {#if modelGroups.length === 0}
           <option value="__none__" disabled>(模型列表不可用)</option>
         {/if}
@@ -176,14 +183,14 @@
     </label>
     <label
       class="inline-flex items-center gap-2 rounded-lg border border-border bg-card/40 px-3 py-1.5 whitespace-nowrap"
-      title="执行阶段(放行后的执行回合)worker 会话使用的模型;与分析模型可不同,同会话按回合切换">
+      title="执行阶段(放行后的执行回合)worker 会话使用的模型;与分析模型可不同,同会话按回合切换;必须显式选择">
       <span class="text-[13px] font-medium">执行模型</span>
       <select
         bind:value={executeSel}
         onchange={() => onmodel("modelExecute", executeSel)}
         class="max-w-44 rounded-md border border-border bg-background px-1.5 py-1 text-[12px] text-foreground outline-none focus:ring-1 focus:ring-ring"
         aria-label="执行阶段模型">
-        <option value="">{MODEL_PLACEHOLDER}</option>
+        <option value="" disabled>请选择模型</option>
         {#if modelGroups.length === 0}
           <option value="__none__" disabled>(模型列表不可用)</option>
         {/if}

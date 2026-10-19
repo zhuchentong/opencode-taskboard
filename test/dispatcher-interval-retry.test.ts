@@ -39,7 +39,7 @@ describe("interval 节流窗到期自动重试(批量即时填槽)", () => {
       },
     }
     const store = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    await store.setSettings({ autoDispatch: true })
+    await store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     for (let i = 1; i <= 6; i++) await toPending(store, `批量任务 ${i}`)
 
     const session = fakeSession()
@@ -71,7 +71,7 @@ describe("interval 节流窗到期自动重试(批量即时填槽)", () => {
       },
     }
     const store = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    await store.setSettings({ autoDispatch: true })
+    await store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     for (let i = 1; i <= 8; i++) await toPending(store, `超槽任务 ${i}`)
 
     const session = fakeSession()

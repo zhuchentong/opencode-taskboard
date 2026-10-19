@@ -13,7 +13,11 @@ afterEach(() => {
   while (started.length) started.pop()?.stop()
 })
 
-function setup(store: Store, extra: Partial<Parameters<typeof createServer>[1]> = {}) {
+async function setup(store: Store, extra: Partial<Parameters<typeof createServer>[1]> = {}, opts: { models?: boolean } = {}) {
+  // 建任务门禁要求阶段模型配齐:除显式关闭(opts.models === false)外,默认给测试 store 配上模型
+  if (opts.models !== false) {
+    await store.setSettings({ modelAnalyze: "test/analyze", modelExecute: "test/execute" })
+  }
   const handle = createServer(store, {
     port: 0,
     token: "tok123",
@@ -38,9 +42,29 @@ async function toCompletionConfirm(s: Store) {
 }
 
 describe("REST API", () => {
+  test("POST /api/tasks 建任务门禁:阶段模型未配齐 → 409 model_not_configured;配齐后放行", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    const base = await setup(s, {}, { models: false })
+
+    // 两个都没配 → 拒
+    const r1 = await fetch(`${base}/api/tasks`, { method: "POST", headers: H, body: JSON.stringify({ title: "没配模型" }) })
+    expect(r1.status).toBe(409)
+    expect(((await r1.json()) as { error: { code: string } }).error.code).toBe("model_not_configured")
+
+    // 只配分析模型 → 仍拒
+    await s.setSettings({ modelAnalyze: "test/analyze" })
+    const r2 = await fetch(`${base}/api/tasks`, { method: "POST", headers: H, body: JSON.stringify({ title: "缺执行模型" }) })
+    expect(r2.status).toBe(409)
+
+    // 配齐 → 放行
+    await s.setSettings({ modelExecute: "test/execute" })
+    const r3 = await fetch(`${base}/api/tasks`, { method: "POST", headers: H, body: JSON.stringify({ title: "配齐了" }) })
+    expect(r3.status).toBe(201)
+  })
+
   test("POST 创建 → 列表含之；PATCH 改标题", async () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    const base = setup(s)
+    const base = await setup(s)
     const r1 = await fetch(`${base}/api/tasks`, { method: "POST", headers: H, body: JSON.stringify({ title: "新任务" }) })
     expect(r1.status).toBe(201)
     const created = (await r1.json()) as { id: string; status: string }
@@ -60,7 +84,7 @@ describe("REST API", () => {
 
   test("reject 无评论 → 400 comment_required；confirm 于 completion_confirm → done", async () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    const base = setup(s)
+    const base = await setup(s)
     const t = await toCompletionConfirm(s)
 
     const r1 = await fetch(`${base}/api/tasks/${t.id}`, {
@@ -81,7 +105,7 @@ describe("REST API", () => {
 
   test("无 token → 403；token 对但非 JSON Content-Type → 415；GET 免 token", async () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    const base = setup(s)
+    const base = await setup(s)
     const r1 = await fetch(`${base}/api/tasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -102,7 +126,7 @@ describe("REST API", () => {
 
   test("PUT settings 后 GET 返回新值且 store 行为改变", async () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    const base = setup(s)
+    const base = await setup(s)
     const r1 = await fetch(`${base}/api/settings`, {
       method: "PUT",
       headers: H,
@@ -122,7 +146,7 @@ describe("REST API", () => {
 
   test("PUT settings 合并语义：只提交一个字段不抹掉另一个", async () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    const base = setup(s)
+    const base = await setup(s)
     await s.setSettings({ autoDispatch: true })
 
     const r = await fetch(`${base}/api/settings`, {
@@ -131,7 +155,12 @@ describe("REST API", () => {
       body: JSON.stringify({ requireAnalysisConfirm: true }),
     })
     expect(r.status).toBe(200)
-    expect(await r.json()).toEqual({ requireAnalysisConfirm: true, autoDispatch: true })
+    expect(await r.json()).toEqual({
+      requireAnalysisConfirm: true,
+      autoDispatch: true,
+      modelAnalyze: "test/analyze",
+      modelExecute: "test/execute",
+    })
 
     // 非布尔 → 400
     const bad = await fetch(`${base}/api/settings`, {
@@ -148,7 +177,7 @@ describe("REST API", () => {
   test("写操作触发 onWrite 观察者（自动派发器挂点）", async () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
     let calls = 0
-    const base = setup(s, { onWrite: () => calls++ })
+    const base = await setup(s, { onWrite: () => calls++ })
     await fetch(`${base}/api/tasks`, { method: "POST", headers: H, body: JSON.stringify({ title: "t" }) })
     await new Promise((r) => setTimeout(r, 10))
     expect(calls).toBe(1)
@@ -156,7 +185,7 @@ describe("REST API", () => {
 
   test("health / logs / 未知 API 路径", async () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    const base = setup(s)
+    const base = await setup(s)
     const h = await (await fetch(`${base}/api/health`)).json()
     expect(h).toEqual({ ok: true, primary: true, projectID: "proj-test" })
     const l = await (await fetch(`${base}/api/logs`)).json()
@@ -168,7 +197,7 @@ describe("REST API", () => {
 
   test("StoreError 映射：not_found → 404", async () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    const base = setup(s)
+    const base = await setup(s)
     const r = await fetch(`${base}/api/tasks/task_nope`, { method: "PATCH", headers: H, body: JSON.stringify({ title: "x" }) })
     expect(r.status).toBe(404)
     expect(((await r.json()) as { error: { code: string } }).error.code).toBe("not_found")
@@ -176,7 +205,7 @@ describe("REST API", () => {
 
   test("DELETE 不带 Content-Type 也成功；错 token 仍 403", async () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    const base = setup(s)
+    const base = await setup(s)
     const created = await (await fetch(`${base}/api/tasks`, { method: "POST", headers: H, body: JSON.stringify({ title: "待删" }) })).json()
 
     const ok = await fetch(`${base}/api/tasks/${created.id}`, { method: "DELETE", headers: { "X-Taskboard-Token": "tok123" } })
@@ -191,7 +220,7 @@ describe("REST API", () => {
 
   test("GET /api/tasks/:id 返回单条；未知 id → 404", async () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    const base = setup(s)
+    const base = await setup(s)
     const created = await (await fetch(`${base}/api/tasks`, { method: "POST", headers: H, body: JSON.stringify({ title: "单查" }) })).json()
 
     const one = await fetch(`${base}/api/tasks/${created.id}`)
@@ -207,7 +236,7 @@ describe("REST API", () => {
 describe("工具操作代理路由", () => {
   async function setupStore() {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    const base = setup(s)
+    const base = await setup(s)
     return { s, base }
   }
 
@@ -293,7 +322,7 @@ describe("静态页", () => {
     )
     try {
       const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-      const base = setup(s)
+      const base = await setup(s)
       const r = await fetch(`${base}/`)
       const body = await r.text()
       expect(body).toContain('window.__TASKBOARD_TOKEN__ = "tok123"')
@@ -323,7 +352,7 @@ describe("SSE 连接稳定性（idleTimeout 回归守护）", () => {
 describe("模型列表路由", () => {
   test("GET /api/models 返回注入的模型清单(读路径无鉴权,与 tasks/logs 一致)", async () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    const base = setup(s, {
+    const base = await setup(s, {
       listModels: async () => ["zhipuai-coding-plan/glm-5.3-flash", "minimax-cn-coding-plan/MiniMax-M3.1"],
     })
     const r = await fetch(`${base}/api/models`).then((x) => x.json())
@@ -334,7 +363,7 @@ describe("模型列表路由", () => {
 
   test("未注入 listModels 时返回空列表(前端下拉退化+提示)", async () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    const base = setup(s)
+    const base = await setup(s)
     const r = await fetch(`${base}/api/models`).then((x) => x.json())
     expect(r).toEqual({ models: [] })
   })
@@ -344,7 +373,7 @@ describe("项目 API", () => {
   const realDir = () => mkdtempSync(join(tmpdir(), "tb-proj-"))
 
   test("GET /api/projects 无鉴权返回含合成默认项目", async () => {
-    const base = setup(createStore(memoryBackend(), { requireAnalysisConfirm: false }))
+    const base = await setup(createStore(memoryBackend(), { requireAnalysisConfirm: false }))
     const r = await fetch(`${base}/api/projects`)
     expect(r.status).toBe(200)
     const { projects } = (await r.json()) as { projects: { id: string; name: string }[] }
@@ -352,7 +381,7 @@ describe("项目 API", () => {
   })
 
   test("POST 无 token → 403", async () => {
-    const base = setup(createStore(memoryBackend(), { requireAnalysisConfirm: false }))
+    const base = await setup(createStore(memoryBackend(), { requireAnalysisConfirm: false }))
     const r = await fetch(`${base}/api/projects`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -362,7 +391,7 @@ describe("项目 API", () => {
   })
 
   test("POST 相对路径/不存在目录/指向文件 → 400 invalid_input 文案含路径", async () => {
-    const base = setup(createStore(memoryBackend(), { requireAnalysisConfirm: false }))
+    const base = await setup(createStore(memoryBackend(), { requireAnalysisConfirm: false }))
     const dir = realDir()
     const file = join(dir, "f.txt")
     writeFileSync(file, "x")
@@ -381,7 +410,7 @@ describe("项目 API", () => {
   })
 
   test("POST 合法目录 → 201 落库;重名 → 400 conflict", async () => {
-    const base = setup(createStore(memoryBackend(), { requireAnalysisConfirm: false }))
+    const base = await setup(createStore(memoryBackend(), { requireAnalysisConfirm: false }))
     const dir = realDir()
     const r1 = await fetch(`${base}/api/projects`, {
       method: "POST",
@@ -401,7 +430,7 @@ describe("项目 API", () => {
 
   test("PATCH 改名成功;DELETE 非 done 守卫 → 400;仅 done → 200 且任务被级联", async () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    const base = setup(s)
+    const base = await setup(s)
     const dir = realDir()
     const p = await s.createProject({ name: "P", workspace: dir })
     const t1 = await s.create({ title: "进行中", projectId: p.id })
@@ -422,7 +451,7 @@ describe("项目 API", () => {
   })
 
   test("SSE 首个 snapshot 事件含 projects 数组(默认项目打头)", async () => {
-    const base = setup(createStore(memoryBackend(), { requireAnalysisConfirm: false, directory: "/proj" }))
+    const base = await setup(createStore(memoryBackend(), { requireAnalysisConfirm: false, directory: "/proj" }))
     const res = await fetch(`${base}/api/events`)
     const reader = (res.body as ReadableStream<Uint8Array>).getReader()
     const { value } = await reader.read()
@@ -437,7 +466,7 @@ describe("项目 API", () => {
 
   test("POST /api/tasks 带 projectId 落正确归属;不带落默认项目", async () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    const base = setup(s)
+    const base = await setup(s)
     const p = await s.createProject({ name: "P", workspace: realDir() })
     const r1 = await fetch(`${base}/api/tasks`, {
       method: "POST",
@@ -457,7 +486,7 @@ describe("项目 API", () => {
 describe("项目 API 补遗(审查 I-1)", () => {
   test("GET /api/projects/:id 返回项目(次要实例代理链依赖)", async () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    const base = setup(s)
+    const base = await setup(s)
     const p = await s.createProject({ name: "代理链", workspace: process.cwd() })
     const r = await fetch(`${base}/api/projects/${p.id}`)
     expect(r.status).toBe(200)

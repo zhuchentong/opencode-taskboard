@@ -7,6 +7,8 @@ import { createStore, memoryBackend } from "../src/store"
 describe("双实例代理（次要实例写路径）", () => {
   test("经次要端口的 claim/patch 落到主实例存储；次要端 GET 反映主实例数据", async () => {
     const primaryStore = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    // 建任务门禁:先配齐阶段模型
+    await primaryStore.setSettings({ modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     const primary = createServer(primaryStore, {
       port: 0,
       token: "tok-primary",

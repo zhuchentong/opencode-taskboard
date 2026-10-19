@@ -218,6 +218,8 @@ export function describeError(e: unknown): string {
         return `看板服务不可达：${msg}（主实例可能已退出，请让用户重启 OpenCode 会话）`
       case "forbidden":
         return `访问被拒绝：令牌不匹配。${msg}（请让用户重启会话以重新同步令牌）`
+      case "model_not_configured":
+        return `操作被拒绝：${msg}（建任务前需在网页页头配置分析模型与执行模型）`
       default:
         return `看板操作失败：${msg}`
     }

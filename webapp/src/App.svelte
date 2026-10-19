@@ -11,10 +11,12 @@
   import { needsTicker } from "./lib/duration"
   import { startTicker, stopTicker } from "./lib/ticker.svelte"
   import { connectEvents } from "./lib/events"
+  import { modelsConfigured } from "./lib/model-options"
   import { Skeleton } from "$lib/components/ui/skeleton"
   import { Toaster } from "$lib/components/ui/sonner"
   import Header from "./components/Header.svelte"
   import Board from "./components/Board.svelte"
+  import ModelGate from "./components/ModelGate.svelte"
   import TaskDetail from "./components/TaskDetail.svelte"
   import ConfirmDialog from "./components/ConfirmDialog.svelte"
   import type { Status, Task } from "./lib/types"
@@ -30,6 +32,8 @@
   let loaded = $state(false)
   let mode = $state<ThemeMode>(get(themeMode))
   let models = $state<string[]>([])
+  // 模型门禁:两阶段模型配齐才显示泳道与建任务入口,否则引导到页头配置
+  const modelsReady = $derived(modelsConfigured(board.settings))
   let detailId = $state<string | null>(null)
   let detailInitialReject = $state(false)
   /** 项目筛选(空串=全部);仅前端本地视图状态 */
@@ -150,7 +154,7 @@
       onStatus: (s) => (conn = s),
     })
     refresh() // SSE 建连前的首屏兜底
-    // 模型清单(阶段模型下拉数据源);失败留空,下拉只显示默认项
+    // 模型清单(阶段模型下拉数据源);失败留空,下拉只显示占位与提示
     fetchModels()
       .then((m) => (models = m))
       .catch(() => {})
@@ -225,16 +229,20 @@
   />
 
   {#if loaded}
-    <Board
-      tasks={filteredVisible}
-      pendingIds={board.pending}
-      flashIds={flashIds}
-      {projMap}
-      onopen={openDetail}
-      onconfirm={quickConfirm}
-      onquickreject={quickReject}
-      onmove={moveTask}
-    />
+    {#if modelsReady}
+      <Board
+        tasks={filteredVisible}
+        pendingIds={board.pending}
+        flashIds={flashIds}
+        {projMap}
+        onopen={openDetail}
+        onconfirm={quickConfirm}
+        onquickreject={quickReject}
+        onmove={moveTask}
+      />
+    {:else}
+      <ModelGate />
+    {/if}
   {:else}
     <main class="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-2.5 p-4" aria-label="加载中">
       {#each Array(7) as _, i (i)}

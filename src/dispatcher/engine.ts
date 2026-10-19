@@ -393,6 +393,16 @@ export function initDispatcher(
       lastSkipReason = v.reason
       return
     }
+    // 模型门禁:两阶段模型未配齐一律不派发,绝不回退 opencode 默认解析
+    // (无显式模型的 worker 会话有创建即挂起风险)。网页与服务端建任务门禁下
+    // 正常流程到不了这里;此守卫防御旧数据与直调 API 建的任务。
+    if (!phaseModels.analyze || !phaseModels.execute) {
+      if (lastSkipReason !== "model-not-configured" && pendingTotal > 0) {
+        deps.log("派发跳过：分析/执行模型未配齐，请在网页页头配置后再启用自动领取")
+      }
+      lastSkipReason = pendingTotal > 0 ? "model-not-configured" : ""
+      return
+    }
     // pending 已剔除冷却中与在途任务；若为空（全部待领取任务均在任务冷却或已在途），
     // 不可派遣 pending[0]（undefined 会崩溃），记日志后等下一轮（冷却到期会自然恢复）。
     // lastSkipReason 不应在此被误清为 ""：pendingTotal>0 说明看板上仍有待领取任务，

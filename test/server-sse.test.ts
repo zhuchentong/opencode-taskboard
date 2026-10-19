@@ -99,6 +99,8 @@ describe("SSE 事件流", () => {
   test("连接即推 hello + 全量快照；写操作后广播 snapshot", async () => {
     const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
     const base = setup(s)
+    // 建任务门禁:先配齐阶段模型
+    await s.setSettings({ modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     const ctrl = new AbortController()
     const res = await openStream(base, ctrl.signal)
     expect(res.status).toBe(200)
@@ -108,7 +110,12 @@ describe("SSE 事件流", () => {
     expect(await reader.nextEvent()).toEqual({ type: "hello" })
     const init = assertSnapshot(await reader.nextEvent(), "连接快照")
     expect(init.tasks).toEqual([])
-    expect(init.settings).toEqual({ requireAnalysisConfirm: false, autoDispatch: true })
+    expect(init.settings).toEqual({
+      requireAnalysisConfirm: false,
+      autoDispatch: true,
+      modelAnalyze: "test/analyze",
+      modelExecute: "test/execute",
+    })
 
     const created = await fetch(`${base}/api/tasks`, {
       method: "POST",
@@ -125,7 +132,12 @@ describe("SSE 事件流", () => {
       body: JSON.stringify({ requireAnalysisConfirm: true }),
     })
     const afterPut = assertSnapshot(await reader.nextEvent(), "更新设置后")
-    expect(afterPut.settings).toEqual({ requireAnalysisConfirm: true, autoDispatch: true })
+    expect(afterPut.settings).toEqual({
+      requireAnalysisConfirm: true,
+      autoDispatch: true,
+      modelAnalyze: "test/analyze",
+      modelExecute: "test/execute",
+    })
 
     ctrl.abort()
   })

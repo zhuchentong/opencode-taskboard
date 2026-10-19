@@ -119,7 +119,7 @@ describe("派发延迟修订：按任务冷却与即时填槽", () => {
   /** 建派发器并开启自动派发（显式声明,不依赖默认值) */
   async function armed(opts = {}) {
     const h = harness({ ...FAST, ...opts })
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     return h
   }
 
@@ -204,7 +204,7 @@ describe("派发延迟修订：按任务冷却与即时填槽", () => {
     await h.store.setSettings({ autoDispatch: false })
     h.d.notifyWrite()
     await sleep(40)
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     h.d.notifyWrite()
     await sleep(40)
     expect(h.d.status().queuedCooldownCount).toBe(0)
@@ -246,7 +246,7 @@ describe("initDispatcher 接线", () => {
       },
     }
     const store = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    await store.setSettings({ autoDispatch: true })
+    await store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     await toPending(store, "存量任务")
 
     const session = fakeSession()
@@ -275,7 +275,7 @@ describe("initDispatcher 接线", () => {
   test("pending + 开关开启 → 每任务新建会话并派发，prompt 带上 taskID，工作目录为项目目录", async () => {
     const h = harness()
     const t = await toPending(h.store, "写个功能")
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     h.fire()
     await sleep(60)
     expect(h.session.prompts).toHaveLength(1)
@@ -297,7 +297,7 @@ describe("initDispatcher 接线", () => {
 
   test("并发槽满（maxConcurrent）不再派发", async () => {
     const h = harness()
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     for (let i = 0; i < DISPATCH_CAPS.maxConcurrent; i++) await toAnalyzing(h.store, `占用${i}`)
     await toPending(h.store, "排队中")
     h.fire()
@@ -311,7 +311,7 @@ describe("initDispatcher 接线", () => {
 
   test("多任务真并行：每个任务各自新建会话，互不复用", async () => {
     const h = harness({ minIntervalMs: 1, claimWaitMs: 5_000 })
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     const ids: string[] = []
     for (let i = 0; i < 3; i++) ids.push((await toPending(h.store, `任务${i}`)).id)
     for (let i = 0; i < 3; i++) {
@@ -330,7 +330,7 @@ describe("initDispatcher 接线", () => {
   test("未领取超时 → 任务退回待领取并回收名额，但不暂停全局派发", async () => {
     const h = harness({ claimWaitMs: 20, backoffBaseMs: 10, minIntervalMs: 1, evaluateMs: 10 })
     const t = await toPending(h.store, "没人领")
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     h.fire()
     await sleep(120) // 10ms 节流 + 20ms 超时 + 回收
     expect((await h.store.get(t.id)).status).toBe("pending") // 退回待领取，可重新派
@@ -346,7 +346,7 @@ describe("initDispatcher 接线", () => {
     // 真实事故：评估纯写事件驱动，超时冷却到期后无人再触发 → 任务挂在待领取
     const h = harness({ claimWaitMs: 20, backoffBaseMs: 30, minIntervalMs: 1, evaluateMs: 10, evaluateTickMs: 15 })
     const t = await toPending(h.store, "兜底恢复")
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     h.fire()
     await sleep(500) // 首派 10ms + 超时 20ms + 冷却 30ms + tick 15ms → 第二轮派发
     const dispatches = h.lines.filter((l) => l.includes("派发 →")).length
@@ -357,7 +357,7 @@ describe("initDispatcher 接线", () => {
 
   test("已领取的在途派发即时释放名额", async () => {
     const h = harness({ minIntervalMs: 1, claimWaitMs: 5_000 })
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     const t = await toPending(h.store, "t1")
     h.fire()
     await sleep(50)
@@ -412,7 +412,7 @@ describe("initDispatcher 接线", () => {
 
   test("confirm-off（默认流程）：worker 自查自执行不经停确认 → 不打断", async () => {
     const h = harness({ claimWaitMs: 5_000 })
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     const t = await toPending(h.store, "快速任务")
     await h.store.claim({ id: t.id, sessionID: "ses_w1", agent: "build" })
     await h.store.analyze({ id: t.id, sessionID: "ses_w1", analysis: "a" }) // → executing（无确认关卡）
@@ -425,7 +425,7 @@ describe("initDispatcher 接线", () => {
   test("派发异常进全局熔断：prompt 抛错计连败并冷却，3 连败暂停", async () => {
     const h = harness({ promptFail: true, backoffBaseMs: 10, minIntervalMs: 1, evaluateMs: 10 })
     await toPending(h.store, "t1")
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     for (let i = 1; i <= 3; i++) {
       h.fire()
       await sleep(80)
@@ -443,7 +443,7 @@ describe("initDispatcher 接线", () => {
   test("建会话失败不算派发失败：任务留在待领取，等下轮重试", async () => {
     const h = harness({ createFail: true, minIntervalMs: 1, evaluateMs: 10 })
     const t = await toPending(h.store, "t1")
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     h.fire()
     await sleep(50)
     expect(h.session.prompts).toHaveLength(0)
@@ -455,7 +455,7 @@ describe("initDispatcher 接线", () => {
 
   test("冷却窗口内不重复派发同一任务（超时退避按任务绑定，不牵连其他任务）", async () => {
     const h = harness({ claimWaitMs: 20, backoffBaseMs: 1_000, minIntervalMs: 1 })
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     const t1 = await toPending(h.store, "t1")
     h.fire()
     await sleep(50)
@@ -471,7 +471,7 @@ describe("initDispatcher 接线", () => {
 
   test("任务终结补记 token 消耗并广播快照", async () => {
     const h = harness({ claimWaitMs: 5_000 })
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     const t = await toPending(h.store, "耗时任务")
     await h.store.claim({ id: t.id, sessionID: "ses_w1", agent: "build" })
     // 手工造的 claim 要有对应会话，否则 session.get 探活失败、读不到 token
@@ -498,7 +498,7 @@ describe("initDispatcher 接线", () => {
 
   test("消耗刷新定时器：活跃任务周期性回写 token", async () => {
     const h = harness({ claimWaitMs: 5_000, usagePollMs: 15 })
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     const t = await toPending(h.store, "长任务")
     await h.store.claim({ id: t.id, sessionID: "ses_w1", agent: "build" })
     h.session.created.push({ id: "ses_w1" }) // 让 session.get 能查到

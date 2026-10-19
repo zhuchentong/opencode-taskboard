@@ -33,9 +33,9 @@ describe("resolvePhaseModel", () => {
     ).toEqual({ providerID: "web", id: "model-a" })
   })
 
-  test("settings 空串=显式跟随默认:压过 env 兜底,返回 null", () => {
-    // 用户在网页选了「跟随默认」即表达「不要用 env 的模型」
-    expect(resolvePhaseModel("analyze", { modelAnalyze: "" }, fallback)).toBeNull()
+  test("settings 空串=未配置:回退兜底(「跟随默认」选项已移除,空串不再有显式语义)", () => {
+    expect(resolvePhaseModel("analyze", { modelAnalyze: "" }, fallback)).toEqual(fallback)
+    expect(resolvePhaseModel("analyze", { modelAnalyze: "" }, null)).toBeNull()
   })
 
   test("settings 未设置(undefined)时回退 env/config 兜底", () => {

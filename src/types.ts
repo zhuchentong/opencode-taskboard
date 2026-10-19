@@ -116,6 +116,7 @@ export const STORE_ERROR_CODES = [
   "invalid_input",
   "unreachable",
   "forbidden",
+  "model_not_configured",
 ] as const
 
 export type StoreErrorCode = (typeof STORE_ERROR_CODES)[number]

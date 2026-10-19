@@ -4,8 +4,10 @@ export interface ModelGroup {
   models: string[]
 }
 
-/** 空值选项(下拉第一项):跟随 opencode 默认解析 */
-export const MODEL_PLACEHOLDER = "跟随 opencode 默认"
+/** 模型门禁:分析/执行模型都显式配置(非空字符串)才算已配置;空串/undefined 一律未配置 */
+export function modelsConfigured(settings: { modelAnalyze?: string; modelExecute?: string }): boolean {
+  return Boolean(settings.modelAnalyze) && Boolean(settings.modelExecute)
+}
 
 /** "provider/model" 行分组;非法行(缺斜杠/空)跳过 */
 export function groupModels(models: string[]): ModelGroup[] {

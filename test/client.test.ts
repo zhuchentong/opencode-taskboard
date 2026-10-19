@@ -7,6 +7,8 @@ import { DEFAULT_PROJECT_ID } from "../src/types"
 describe("clientStore（HTTP Store 实现）", () => {
   test("完整闭环经 HTTP 与本地 store 等价；错误映射为 StoreError", async () => {
     const backend = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    // 建任务门禁:先配齐阶段模型
+    await backend.setSettings({ modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     const handle: ServerHandle = createServer(backend, {
       port: 0,
       token: "tok",
@@ -37,7 +39,12 @@ describe("clientStore（HTTP Store 实现）", () => {
       expect(ps.map((x) => x.name)).toContain("远程项目")
 
       await s.setSettings({ requireAnalysisConfirm: true })
-      expect(await s.getSettings()).toEqual({ requireAnalysisConfirm: true, autoDispatch: true })
+      expect(await s.getSettings()).toEqual({
+        requireAnalysisConfirm: true,
+        autoDispatch: true,
+        modelAnalyze: "test/analyze",
+        modelExecute: "test/execute",
+      })
 
       await s.release({ id: t.id, sessionID: "s1" }).catch(() => undefined)
       try {

@@ -134,7 +134,7 @@ describe("engine 从看板设置动态解析阶段模型", () => {
       },
     }
     const store = createStore(memoryBackend(), { requireAnalysisConfirm: false })
-    await store.setSettings({ autoDispatch: true, modelAnalyze: "web-an/ma" })
+    await store.setSettings({ autoDispatch: true, modelAnalyze: "web-an/ma", modelExecute: "test/execute" })
     await toPending(store, "设置模型任务")
 
     const { session, created } = fakeSession()
@@ -158,7 +158,7 @@ describe("engine 从看板设置动态解析阶段模型", () => {
     d.dispose()
   })
 
-  test("settings 未配置且无兜底:create 不带 model", async () => {
+  test("settings 未配置且无兜底:跳过派发,不创建会话(绝不回退 opencode 默认解析)", async () => {
     const entries: Record<string, unknown> = {}
     const storage = {
       get: async (k: string) => entries[k],
@@ -185,8 +185,7 @@ describe("engine 从看板设置动态解析阶段模型", () => {
       },
     )
     await new Promise((r) => setTimeout(r, 80))
-    expect(created.length).toBeGreaterThanOrEqual(1)
-    expect(created[0]?.model).toBeUndefined()
+    expect(created.length).toBe(0)
     d.dispose()
   })
 })

@@ -126,7 +126,7 @@ describe("engine 装配(沿驱动 initDispatcher)", () => {
     const h = harness({ claimWaitMs: 5_000 })
     await toPending(h.store, "任务A")
     await toPending(h.store, "任务B")
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     await h.fire()
     await sleep(80)
     // 旧实现:一轮评估只派 1,dispatch 末尾续跑被丢弃 → 1 单;新实现排空 → 2 单
@@ -196,7 +196,7 @@ describe("engine 装配(沿驱动 initDispatcher)", () => {
 
   test("任务级退避隔离:A 连续超时进 2 档冷却,B 首次超时仍是 1 档", async () => {
     const h = harness({ claimWaitMs: 20, backoffBaseMs: 200, evaluateTickMs: 25 })
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     const a = await toPending(h.store, "任务A")
     await h.fire()
     await sleep(120) // A 超时(streak=1,冷却 200ms)
@@ -214,7 +214,7 @@ describe("engine 装配(沿驱动 initDispatcher)", () => {
 
   test("建会话失败连败在派发成功后归零:孤立失败不再吃历史翻倍退避(M-5 回归钉子)", async () => {
     const h = harness({ claimWaitMs: 5_000, backoffBaseMs: 200 })
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     // 第一段:create 恒败 → streak=1,create-fail 冷却 ≈ 200ms(1 档)
     h.session.create = async () => {
       throw new Error("配额耗尽")
@@ -351,7 +351,7 @@ describe("engine 装配(沿驱动 initDispatcher)", () => {
 
   test("任务删除:沿状态键清理,再建同名任务不串历史(审查重点 3)", async () => {
     const h = harness({ claimWaitMs: 5_000 })
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     const t = await toPending(h.store, "将删除")
     await h.fire()
     await sleep(30)
@@ -389,7 +389,7 @@ describe("engine 装配(沿驱动 initDispatcher)", () => {
   test("关开复位:paused/冷却/任务退避全清且落盘", async () => {
     const h = harness({ promptFail: true, claimWaitMs: 20, backoffBaseMs: 10 })
     await toPending(h.store, "t1")
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     for (let i = 0; i < 3; i++) {
       await h.fire()
       await sleep(60)
@@ -398,7 +398,7 @@ describe("engine 装配(沿驱动 initDispatcher)", () => {
     await h.store.setSettings({ autoDispatch: false })
     await h.fire()
     await sleep(30)
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     await h.fire()
     await sleep(30)
     expect(h.d.status().state).not.toBe("paused")
@@ -421,7 +421,7 @@ describe("engine 装配(沿驱动 initDispatcher)", () => {
 
   test("全部待领取任务在任务冷却中时不报 empty：pendingTotal>0 但 pending 为空，不崩溃且任务保持 pending", async () => {
     const h = harness({ claimWaitMs: 20, backoffBaseMs: 1000, minIntervalMs: 1 })
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     const t1 = await toPending(h.store, "t1")
     h.fire()
     await sleep(50) // 派出，进入 awaiting（in-flight）
@@ -443,7 +443,7 @@ describe("engine 装配(沿驱动 initDispatcher)", () => {
 
   test("全部待领取任务在任务冷却中时 lastSkipReason 应为 cooldown 而非空字符串", async () => {
     const h = harness({ claimWaitMs: 20, backoffBaseMs: 1000, minIntervalMs: 1 })
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     const t1 = await toPending(h.store, "t1")
     h.fire()
     await sleep(50) // 派出，进入 awaiting（in-flight）
@@ -480,7 +480,7 @@ describe("派发工作区解析", () => {
     const p = await h.store.createProject({ name: "网关", workspace: "/p1-workspace" })
     const t = await toPending(h.store, "项目任务")
     await h.store.patch(t.id, { projectId: p.id })
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     await h.fire()
     await sleep(80)
     expect(h.session.created[0].directory).toBe("/p1-workspace")
@@ -491,7 +491,7 @@ describe("派发工作区解析", () => {
   test("任务归属默认项目 → 会话建在 ctx.directory,提示词省项目行", async () => {
     const h = harness({ claimWaitMs: 5_000 })
     await toPending(h.store, "默认项目任务")
-    await h.store.setSettings({ autoDispatch: true })
+    await h.store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     await h.fire()
     await sleep(80)
     expect(h.session.created[0].directory).toBe("/proj")
@@ -539,7 +539,7 @@ describe("派发工作区解析", () => {
     // 手工把归属指向已消失的项目(模拟存储键残留/外部改动——绕过 store 校验直接写 KV)
     const raw = (await backend.get(`task/${t.id}`)) as Task
     await backend.set(`task/${t.id}`, { ...raw, projectId: "project_ghost" })
-    await store.setSettings({ autoDispatch: true })
+    await store.setSettings({ autoDispatch: true, modelAnalyze: "test/analyze", modelExecute: "test/execute" })
     await registered?.()
     await sleep(80)
     expect(created[0].directory).toBe("/proj")
