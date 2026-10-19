@@ -40,7 +40,7 @@
 - Consumes: 现有 `guard`/`StoreError` 均不使用（本路由读路径、本地错误响应）。
 - Produces: `GET /api/fs/ls?path=<绝对路径>` → 200 `{ path: string, parent: string | null, home: string, entries: Array<{ name: string, path: string, type: "dir" }> }`；错误 400 `invalid_path` / 404 `not_found` / 403 `forbidden`，体形 `{ error: { code, message } }`。语义：`path` 缺省 = `os.homedir()`；显式空串/相对路径 = 400；入口先 `path.resolve` 归一；只列目录（逐条 `stat` 跟随符号链接）；单条 stat 失败跳过；排序后截断 500；根目录 `parent` 为 `null`。
 
-- [ ] **Step 1: 写失败测试**（`test/server.test.ts` 新增块，用例描述中文）
+- [x] **Step 1: 写失败测试**（`test/server.test.ts` 新增块，用例描述中文）
 
 ```ts
 describe("目录浏览路由", () => {
@@ -95,21 +95,21 @@ describe("目录浏览路由", () => {
 })
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `bun test test/server.test.ts`
 Expected: 新用例 FAIL——路由不存在时 fetch 落入静态文件 fallback，`res.json()` 解析 HTML 抛错。
 
-- [ ] **Step 3: 实现**（`src/server.ts`）
+- [x] **Step 3: 实现**（`src/server.ts`）
 
 顶部补 `import { readdir, stat } from "node:fs/promises"`、`import { homedir } from "node:os"`（`isAbsolute`/`join`/`dirname`/`resolve` 按现有 import 合并）。在 `createServer` 闭包内实现 `handleFsList(url: URL): Promise<Response>`，逻辑按 Interfaces 语义；注释记录「只读列目录不做沙箱」与「单条 stat 失败跳过」两个决策。路由挂载在 `/api/projects` 块之后：`if (pathname === "/api/fs/ls" && method === "GET") return handleFsList(new URL(req.url))`（无 `guard`，读路径）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `bun test test/server.test.ts`
 Expected: PASS（含既有用例，注意在途 `model_not_configured` 用例行为不受影响）。
 
-- [ ] **Step 5: 提交（先问用户在途改动处置，hunk 级暂存）**
+- [x] **Step 5: 提交（先问用户在途改动处置，hunk 级暂存）**
 
 ```bash
 git add -p src/server.ts test/server.test.ts   # 只挑本功能 hunk
@@ -136,21 +136,21 @@ git commit -m "feat: 🌐 目录浏览 API——GET /api/fs/ls 只列目录,单�
   - `sortEntries(entries: FsEntry[]): FsEntry[]`——`localeCompare` `{ numeric: true }`，返回新数组不变异
   - `describeFsError(err: unknown): string`——`BoardApiError.code` 映射中文（`invalid_path` 含「绝对路径」、`not_found` 含「不存在」、`forbidden` 含「权限」），非 BoardApiError 兜底「目录加载失败」
 
-- [ ] **Step 1: 写失败测试**（覆盖上述全部签名与边界：根单节、多级累积、`parentOf` 根边界、排序数位感知 + 不变异、三类 code 映射 + 兜底）
+- [x] **Step 1: 写失败测试**（覆盖上述全部签名与边界：根单节、多级累积、`parentOf` 根边界、排序数位感知 + 不变异、三类 code 映射 + 兜底）
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `bun test webapp/test/fsbrowse.test.ts`
 Expected: FAIL（模块不存在）
 
-- [ ] **Step 3: 实现** `webapp/src/lib/fsbrowse.ts` 与 `api.ts` 的 `listDir`
+- [x] **Step 3: 实现** `webapp/src/lib/fsbrowse.ts` 与 `api.ts` 的 `listDir`
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `bun test webapp/test/fsbrowse.test.ts && bun test`
 Expected: PASS（全量回归）
 
-- [ ] **Step 5: 构建 + 提交**
+- [x] **Step 5: 构建 + 提交**
 
 ```bash
 bun run build:web
@@ -169,9 +169,9 @@ git commit -m "feat: 🧭 前端目录数据层——listDir 封装与 fsbrowse 
 - Consumes: 现有 `projects` props、`openEdit`/`remove`（签名不变）。
 - Produces: 无（纯视图改造，表单区不动）。
 
-- [ ] **Step 1: 改造列表视图**：列表容器 `grid max-h-[60vh] grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2`；每项目一张卡片 `rounded-lg border p-3 flex flex-col gap-1.5`——头部：项目名（truncate 加粗）+「内置」Badge；中部：workspace（truncate + `title` 全路径）与描述（`line-clamp-2`，无则不占位）；底部操作栏 `border-t pt-2 mt-auto flex justify-end gap-1`：「编辑」ghost +「删除」ghost 红字（`text-destructive`），仅 `!p.builtin` 显示。**不加空状态**（默认项目恒在，列表永不为空）。
-- [ ] **Step 2: 验证**：`bun test` 回归 PASS；`bun run dev` 目检卡片布局、内置项目无操作栏、描述两行截断。
-- [ ] **Step 3: 构建 + 提交**
+- [x] **Step 1: 改造列表视图**：列表容器 `grid max-h-[60vh] grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2`；每项目一张卡片 `rounded-lg border p-3 flex flex-col gap-1.5`——头部：项目名（truncate 加粗）+「内置」Badge；中部：workspace（truncate + `title` 全路径）与描述（`line-clamp-2`，无则不占位）；底部操作栏 `border-t pt-2 mt-auto flex justify-end gap-1`：「编辑」ghost +「删除」ghost 红字（`text-destructive`），仅 `!p.builtin` 显示。**不加空状态**（默认项目恒在，列表永不为空）。
+- [x] **Step 2: 验证**：`bun test` 回归 PASS；`bun run dev` 目检卡片布局、内置项目无操作栏、描述两行截断。
+- [x] **Step 3: 构建 + 提交**
 
 ```bash
 bun run build:web
@@ -191,12 +191,12 @@ git commit -m "feat: 🗂️ 项目管理卡片化——双列网格与底部操
 - Consumes: Task 2 全部导出（`listDir`/`FsListing`/`splitCrumbs`/`parentOf`/`sortEntries`/`describeFsError`）。
 - Produces: `<DirectoryPicker open: boolean（$bindable）, initial: string, onPick: (path: string) => void>`。
 
-- [ ] **Step 1: 实现 `DirectoryPicker.svelte`**：嵌套 Dialog（bits-ui 支持嵌套）；`open` 变 true 时 `listDir(initial || undefined)` 加载（加载态 spinner）；顶部路径输入框回车跳转；面包屑用 `splitCrumbs` 逐节可点；`listing.parent` 非 `null` 时首行 `..` 上级；条目单击进入；错误态显示 `describeFsError` + 重试按钮；底部「选择此目录」→ `onPick(listing.path)` 并置 `open = false`。所有新文案中文。
-- [ ] **Step 2: 集成 `ProjectsDialog` 表单**：workspace 输入行改 flex（Input `flex-1` + 「浏览…」按钮）；`let pickerOpen = $state(false)`；`onPick` 回填 `workspace`。
-- [ ] **Step 3: 验证**：`bun test` 全绿。
-- [ ] **Step 4: 构建**：`bun run build:web`。
-- [ ] **Step 5: 端到端目检**：`bun run dev` → 管理项目 → 新建 → 浏览 → 逐级进入/回车跳转/`..` → 选择此目录 → 保存成功且任务派发不受影响。
-- [ ] **Step 6: 提交**
+- [x] **Step 1: 实现 `DirectoryPicker.svelte`**：嵌套 Dialog（bits-ui 支持嵌套）；`open` 变 true 时 `listDir(initial || undefined)` 加载（加载态 spinner）；顶部路径输入框回车跳转；面包屑用 `splitCrumbs` 逐节可点；`listing.parent` 非 `null` 时首行 `..` 上级；条目单击进入；错误态显示 `describeFsError` + 重试按钮；底部「选择此目录」→ `onPick(listing.path)` 并置 `open = false`。所有新文案中文。
+- [x] **Step 2: 集成 `ProjectsDialog` 表单**：workspace 输入行改 flex（Input `flex-1` + 「浏览…」按钮）；`let pickerOpen = $state(false)`；`onPick` 回填 `workspace`。
+- [x] **Step 3: 验证**：`bun test` 全绿。
+- [x] **Step 4: 构建**：`bun run build:web`。
+- [x] **Step 5: 端到端目检**：`bun run dev` → 管理项目 → 新建 → 浏览 → 逐级进入/回车跳转/`..` → 选择此目录 → 保存成功且任务派发不受影响。
+- [x] **Step 6: 提交**
 
 ```bash
 git add webapp/src/components/DirectoryPicker.svelte webapp/src/components/ProjectsDialog.svelte src/web

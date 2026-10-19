@@ -60,3 +60,13 @@ export function describeFsError(err: unknown): string {
   }
   return "目录加载失败"
 }
+
+/**
+ * 「重试」的目标目录：优先用户输入框里的路径（刚失败的那个），
+ * 否则回退上一次成功列出的目录，都没有则 undefined（服务端列 HOME）。
+ */
+export function retryTarget(input: string, listing: FsListing | null): string | undefined {
+  const typed = input.trim()
+  if (typed) return typed
+  return listing ? listing.path : undefined
+}

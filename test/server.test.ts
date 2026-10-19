@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, symlinkSync, chmodSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { createStore, memoryBackend } from "../src/store"
 import { createServer, type ServerHandle } from "../src/server"
@@ -504,9 +504,10 @@ describe("目录浏览路由", () => {
     symlinkSync(join(root, "gone"), join(root, "dangling")) // stat 失败条目
     const r = await fetch(`${base}/api/fs/ls?path=${encodeURIComponent(root)}`)
     expect(r.status).toBe(200)
-    const body = (await r.json()) as { path: string; parent: string | null; entries: Array<{ name: string; type: string }> }
+    const body = (await r.json()) as { path: string; parent: string | null; home: string; entries: Array<{ name: string; type: string }> }
     expect(body.path).toBe(root)
     expect(body.parent).toBe(dirname(root))
+    expect(body.home).toBe(homedir()) // 前端 HOME 快捷按钮的唯一数据源
     expect(body.entries.map((e) => e.name)).toEqual(["sub"]) // 文件与断链剔除
     for (let i = 0; i < 501; i++) symlinkSync(root, join(root, `d${String(i).padStart(3, "0")}`))
     const r2 = await fetch(`${base}/api/fs/ls?path=${encodeURIComponent(root)}`)
@@ -527,6 +528,11 @@ describe("目录浏览路由", () => {
     expect(((await missing.json()) as { error: { code: string } }).error.code).toBe("not_found")
     const rootLs = await fetch(`${base}/api/fs/ls?path=${encodeURIComponent("/")}`)
     expect(((await rootLs.json()) as { parent: string | null }).parent).toBe(null)
+    const noArg = await fetch(`${base}/api/fs/ls`) // 不传 path → 用户 HOME
+    expect(noArg.status).toBe(200)
+    const homeBody = (await noArg.json()) as { path: string; home: string }
+    expect(homeBody.path).toBe(homedir())
+    expect(homeBody.home).toBe(homedir())
   })
 
   test("GET /api/fs/ls 无权限目录 403 forbidden(非 root 才可测)", async () => {

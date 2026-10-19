@@ -4,7 +4,7 @@
   import { Input } from "$lib/components/ui/input"
   import Spinner from "$lib/components/ui/spinner/spinner.svelte"
   import { listDir } from "$lib/api"
-  import { describeFsError, sortEntries, splitCrumbs, type FsListing } from "$lib/fsbrowse"
+  import { describeFsError, retryTarget, sortEntries, splitCrumbs, type FsListing } from "$lib/fsbrowse"
 
   let {
     open = $bindable(false),
@@ -103,7 +103,7 @@
       {#if error}
         <div class="flex items-center gap-2 rounded border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
           <span class="min-w-0 flex-1 truncate" title={error}>{error}</span>
-          <Button type="button" variant="ghost" size="sm" class="h-6 px-1.5 text-xs" onclick={() => load(listing?.path)}>重试</Button>
+          <Button type="button" variant="ghost" size="sm" class="h-6 px-1.5 text-xs" onclick={() => load(retryTarget(pathInput, listing))}>重试</Button>
         </div>
       {/if}
 

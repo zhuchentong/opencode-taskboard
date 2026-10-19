@@ -16,7 +16,7 @@ export interface ServerHandle {
 
 const SSE_HEARTBEAT_MS = 25_000
 const MAX_SSE_SUBSCRIBERS = 32
-/** 目录列表条目上限：超大目录（如 /usr）不整包返回，防选择器卡死 */
+/** 目录列表条目上限：超大目录（如 /usr）只回前 N 项，防选择器渲染卡死 */
 const FS_LIST_CAP = 500
 
 type Subscriber = {
@@ -107,8 +107,10 @@ export function createServer(
 
   /**
    * 目录浏览：项目工作区选路径的数据源，只读列目录。
-   * - 无鉴权与 tasks/logs/SSE 同姿态（127.0.0.1 绑定 + 写凭 token + 本机单用户）；
-   * - 有意不做路径沙箱：本机开发工具，用户需浏览任意绝对路径；
+   * - 无鉴权：这比既有读路径多暴露了本机目录名枚举（含其他用户 home 是否存在）；
+   *   与 tasks/logs/SSE 同姿态（127.0.0.1 绑定 + 本机单用户），且只列目录名、不读文件内容；
+   * - 有意不做路径沙箱：本机开发工具，用户需浏览任意绝对路径。若日后要收紧，
+   *   最小成本是单独给本路由加 guard（前端 listDir 走统一 request，已自带 token）；
    * - 次要实例各自本地处理（文件系统全机共享，无需代理主实例）。
    */
   async function handleFsList(url: URL): Promise<Response> {
@@ -130,12 +132,17 @@ export function createServer(
     const entries: Array<{ name: string; path: string; type: "dir" }> = []
     for (const d of dirents) {
       const full = join(target, d.name)
+      // readdir 已给出多数条目类型，只对 symlink 才 stat（跟随符号链接）；
       // 单条 stat 失败（/proc 下 EPERM/EIO、断链 symlink）跳过该条目，不让整次列举失败
-      try {
-        if ((await stat(full)).isDirectory()) entries.push({ name: d.name, path: full, type: "dir" })
-      } catch {
-        continue
+      let isDir = d.isDirectory()
+      if (!isDir && d.isSymbolicLink()) {
+        try {
+          isDir = (await stat(full)).isDirectory()
+        } catch {
+          continue
+        }
       }
+      if (isDir) entries.push({ name: d.name, path: full, type: "dir" })
     }
     entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
     const parent = dirname(target)

@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { BoardApiError } from "../src/lib/api"
-import { describeFsError, parentOf, sortEntries, splitCrumbs } from "../src/lib/fsbrowse"
-import type { FsEntry } from "../src/lib/fsbrowse"
+import { describeFsError, parentOf, retryTarget, sortEntries, splitCrumbs } from "../src/lib/fsbrowse"
+import type { FsEntry, FsListing } from "../src/lib/fsbrowse"
 
 const E = (name: string): FsEntry => ({ name, path: `/root/${name}`, type: "dir" })
+const L = (path: string): FsListing => ({ path, parent: "/", home: "/home/me", entries: [] })
 
 describe("splitCrumbs 面包屑切分", () => {
   test("根目录单节", () => {
@@ -49,5 +50,17 @@ describe("describeFsError 错误文案", () => {
   test("非 BoardApiError 兜底", () => {
     expect(describeFsError(new Error("boom"))).toBe("目录加载失败")
     expect(describeFsError("随便")).toBe("目录加载失败")
+  })
+})
+
+describe("retryTarget 重试目标", () => {
+  test("优先重试用户输入的路径（失败后不静默回落旧目录）", () => {
+    expect(retryTarget("/mnt/nas", L("/home/me"))).toBe("/mnt/nas")
+  })
+  test("输入为空则回退上一次成功列出的目录", () => {
+    expect(retryTarget("   ", L("/home/me"))).toBe("/home/me")
+  })
+  test("输入为空且无历史目录则 undefined（由服务端列 HOME）", () => {
+    expect(retryTarget("", null)).toBe(undefined)
   })
 })
