@@ -19,6 +19,8 @@ export interface ContextMessage {
   role: string
   time: number
   parts: ContextPart[]
+  /** 实时流式中：text/reasoning part 以纯文本渲染，message-end 后切 markdown */
+  streaming?: boolean
 }
 
 export interface ContextPage {
