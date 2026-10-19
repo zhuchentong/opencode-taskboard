@@ -4,6 +4,7 @@ import { readdir, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { StoreError } from "./types"
 import type { BoardSettings, Project, Store, Task } from "./types"
+import type { ContextPage, ContextReadInput } from "./context"
 
 export type ServerEvent = { type: "hello" } | { type: "snapshot"; tasks: Task[]; settings: BoardSettings; projects: Project[] }
 
@@ -64,6 +65,8 @@ export function createServer(
     logs?: () => readonly string[]
     /** 可用模型清单(阶段模型下拉数据源;index 注入 opencode models CLI + 缓存) */
     listModels?: () => Promise<string[]>
+    /** 任务上下文分页读取(worker 会话消息;index 注入 context reader,测试可 mock);缺省路由返回空页 */
+    readContext?: (input: ContextReadInput) => Promise<ContextPage>
     /** 每次写广播快照后异步触发（自动派发器等观察者）；携带快照任务列表（沿驱动实时消费），不影响响应 */
     onWrite?: (tasks: Task[]) => void
   },
@@ -336,6 +339,25 @@ export function createServer(
         await emitSnapshot()
         return Response.json(task, { status: 201 })
       }
+    }
+    /**
+     * 任务上下文：worker 会话消息分页（任务详情「上下文」标签数据源）。
+     * - 读路径无鉴权：与会话内容同等敏感度，沿用 tasks/logs/SSE 既有姿态（127.0.0.1 绑定 + 写凭 token）；
+     * - 会话数据源是 opencode 自身 SQLite，各实例同机只读即可，无需代理主实例；
+     * - reader 未注入（如 dev 未接）或任务无会话（未领取/human claim）返回空页而非报错。
+     */
+    const ctxMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/context$/)
+    if (ctxMatch && method === "GET") {
+      const task = await store.get(decodeURIComponent(ctxMatch[1]))
+      const sessionID = task.claim?.sessionID || null
+      if (!sessionID || !opts.readContext) {
+        return Response.json({ sessionID, total: 0, page: [], nextCursor: null, hasMore: false })
+      }
+      const url = new URL(req.url)
+      const rawLimit = Number(url.searchParams.get("limit"))
+      const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 200) : 50
+      const cursor = url.searchParams.get("cursor") ?? undefined
+      return Response.json(await opts.readContext({ sessionID, cursor, limit }))
     }
     if (pathname === "/api/claim" && method === "POST") {
       const bad = guard(req)

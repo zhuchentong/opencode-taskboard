@@ -2,6 +2,7 @@
 // 非 2xx 一律抛 BoardApiError（code 取服务端 error.code，缺省 "unknown"）。
 import type { BoardSettings, Project, Task } from "./types"
 import type { FsListing } from "./fsbrowse"
+import type { ContextPage } from "./context"
 
 declare global {
   interface Window {
@@ -82,6 +83,14 @@ export function listDir(path?: string): Promise<FsListing> {
   if (path !== undefined) q.set("path", path)
   const qs = q.toString()
   return request<FsListing>(`/api/fs/ls${qs ? `?${qs}` : ""}`)
+}
+
+/** 任务上下文分页（worker 会话消息）；cursor 缺省取最新一页 */
+export function fetchTaskContext(taskId: string, cursor?: string): Promise<ContextPage> {
+  const q = new URLSearchParams()
+  if (cursor !== undefined) q.set("cursor", cursor)
+  const qs = q.toString()
+  return request<ContextPage>(`/api/tasks/${encodeURIComponent(taskId)}/context${qs ? `?${qs}` : ""}`)
 }
 
 /** 可用模型清单(worker 阶段模型下拉数据源);服务端不可用时返回空,组件退化提示 */

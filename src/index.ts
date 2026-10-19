@@ -4,6 +4,7 @@ import { createServer, type ServerHandle } from "./server"
 import { registerTools } from "./tools"
 import { registerCommands } from "./commands"
 import { clientStore } from "./client"
+import { createContextReader } from "./context"
 import { initDispatcher, DISPATCH_CAPS } from "./dispatcher"
 import type { Task } from "./types"
 
@@ -208,6 +209,9 @@ export async function arbitrate(opts: {
   logs: () => readonly string[]
   hooks: { onWrite?: (tasks: Task[]) => void }
 }): Promise<{ handle: ServerHandle; store: Store; primary: boolean; primaryPort: number }> {
+  /** 会话上下文读取器：只读打开 opencode 会话库，惰性连接（构造零 IO），主/次实例共用同一实例 */
+  const contextReader = createContextReader()
+
   const tryBind = (p: number, store: Store, primary: boolean): ServerHandle | undefined => {
     try {
       return createServer(store, {
@@ -218,6 +222,7 @@ export async function arbitrate(opts: {
         projectID: opts.projectID,
         logs: opts.logs,
         listModels,
+        readContext: (input) => contextReader.read(input),
         onWrite: (tasks) => opts.hooks.onWrite?.(tasks),
       })
     } catch {
