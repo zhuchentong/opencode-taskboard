@@ -5,6 +5,7 @@ import { registerTools } from "./tools"
 import { registerCommands } from "./commands"
 import { clientStore } from "./client"
 import { createContextReader } from "./context"
+import { createLiveHub, type LiveEvent, type LiveFrame } from "./live"
 import { initDispatcher, DISPATCH_CAPS } from "./dispatcher"
 import type { Task } from "./types"
 
@@ -208,6 +209,8 @@ export async function arbitrate(opts: {
   log: (m: string) => void
   logs: () => readonly string[]
   hooks: { onWrite?: (tasks: Task[]) => void }
+  /** 实时上下文流：注册观看者并返回 detach（主/次实例同样接线——事件总线是 daemon 全局的） */
+  subscribeLive?: (sessionID: string, send: (frame: LiveFrame) => void) => () => void
 }): Promise<{ handle: ServerHandle; store: Store; primary: boolean; primaryPort: number }> {
   /** 会话上下文读取器：只读打开 opencode 会话库，惰性连接（构造零 IO），主/次实例共用同一实例 */
   const contextReader = createContextReader()
@@ -223,6 +226,7 @@ export async function arbitrate(opts: {
         logs: opts.logs,
         listModels,
         readContext: (input) => contextReader.read(input),
+        subscribeLive: opts.subscribeLive,
         onWrite: (tasks) => opts.hooks.onWrite?.(tasks),
       })
     } catch {
@@ -304,16 +308,40 @@ export default Plugin.define({
     const webDir = new URL("./web/", import.meta.url).pathname
 
     const hooks: { onWrite?: (tasks: Task[]) => void } = {}
-    const arb = await arbitrate({
-      port,
-      token,
-      webDir,
-      projectID,
-      localStore,
+
+    // 实时上下文流枢纽：把 opencode 事件总线接到看板的 live SSE 路由。
+    // 订阅是懒的（createLiveHub 内部保证）——只有首个观看者 attach 时才真正订阅总线。
+    // 类型断言：总线事件是大联合类型 V2Event，这里只取与 LiveEvent 结构兼容的子集
+    // （type + data）；断言写明意图，不写成 any/never 之类掩盖真实不兼容的形态。
+    const liveHub = createLiveHub({
+      subscribe: () => ctx.event.subscribe() as unknown as AsyncIterable<LiveEvent>,
       log,
-      logs: () => logs,
-      hooks,
+      // 宿主定时器要求 this 为 globalThis：作为 deps 对象属性被调用时接收者会变成
+      // deps，会抛 Illegal invocation——必须显式绑定（同 webapp/src/lib/events.ts）
+      setInterval: setInterval.bind(globalThis),
+      clearInterval: clearInterval.bind(globalThis),
     })
+
+    // arbitrate 失败（无可用端口等）时 setup 直接抛错、cleanup 永不执行——此处先拆掉
+    // hub 的合帧定时器，免得留下一个每 150ms 空转的孤儿 interval（同 safeRegister 防僵尸端口）
+    let arb: Awaited<ReturnType<typeof arbitrate>>
+    try {
+      arb = await arbitrate({
+        port,
+        token,
+        webDir,
+        projectID,
+        localStore,
+        log,
+        logs: () => logs,
+        hooks,
+        // 主/次实例同样接线：事件总线是 daemon 全局的，本实例的观看者由本实例的 hub 服务
+        subscribeLive: (sessionID, send) => liveHub.attach(sessionID, send),
+      })
+    } catch (e) {
+      liveHub.dispose()
+      throw e
+    }
     log(`就绪：${arb.primary ? "主实例" : "次要实例"} board=http://127.0.0.1:${arb.primaryPort}/`)
 
     // worker 会话模型:opencode 对无 model 的后台会话创建即挂起(回合永不启动),
@@ -382,6 +410,7 @@ export default Plugin.define({
 
     return () => {
       dispatcher?.dispose()
+      liveHub.dispose()
       arb.handle.stop()
       log("已卸载，HTTP 服务停止")
     }
