@@ -185,6 +185,7 @@ function fakeSource() {
   }[] = []
   const logs: string[] = []
   const timers: { fn: () => void; ms: number }[] = []
+  let cleared = 0
   const deps: LiveHubDeps = {
     subscribe: () =>
       ({
@@ -215,7 +216,9 @@ function fakeSource() {
       timers.push({ fn, ms })
       return timers.length
     }) as unknown as LiveHubDeps["setInterval"],
-    clearInterval: (() => {}) as unknown as LiveHubDeps["clearInterval"],
+    clearInterval: (() => {
+      cleared++
+    }) as unknown as LiveHubDeps["clearInterval"],
   }
   return {
     deps,
@@ -223,6 +226,7 @@ function fakeSource() {
     timers,
     last: () => streams[streams.length - 1]!,
     count: () => streams.length,
+    cleared: () => cleared, // dispose 应清理定时器：记录 clearInterval 调用次数供断言
   }
 }
 
@@ -323,10 +327,11 @@ describe("createLiveHub", () => {
     src.last().fail(new Error("断连"))
     await tick()
     expect(src.logs.length).toBeGreaterThan(0)
-    hub.attach("s2", () => {}) // 触发重订阅
+    hub.attach("s2", (f) => got.push(f)) // 触发重订阅
     src.last().push(DELTA("s2", "m2", "ok"))
     await tick()
     flushTimers(src.timers, 150)
+    expect(got).toEqual([{ type: "text-append", kind: "text", messageID: "m2", text: "ok" }]) // s2 观看者确实收到帧
     expect(src.count()).toBe(2)
     hub.dispose()
   })
@@ -337,9 +342,99 @@ describe("createLiveHub", () => {
     const got: LiveFrame[] = []
     hub.attach("s1", (f) => got.push(f))
     hub.dispose()
+    expect(src.cleared()).toBe(1) // 定时器确已清理（fake 记录 clearInterval 调用）
     src.last().push(DELTA("s1", "m1", "x"))
     await tick()
     flushTimers(src.timers, 150)
     expect(got).toEqual([])
+  })
+
+  test("subscribe 同步抛错 → 不上抛、log 记录且不变僵尸；下次 attach 自愈并收到帧", async () => {
+    const src = fakeSource()
+    const realSubscribe = src.deps.subscribe
+    let calls = 0
+    src.deps.subscribe = () => {
+      calls++
+      if (calls === 1) throw new Error("总线瞬断")
+      return realSubscribe()
+    }
+    const hub = createLiveHub(src.deps)
+    const got1: LiveFrame[] = []
+    const got2: LiveFrame[] = []
+    expect(() => hub.attach("s1", (f) => got1.push(f))).not.toThrow() // 同步抛错不上抛给 attach 调用方
+    expect(src.logs.length).toBeGreaterThan(0) // 有日志线索，不是静默失效
+    hub.attach("s1", (f) => got2.push(f)) // 未僵尸化：这次 attach 重建订阅
+    src.last().push(DELTA("s1", "m1", "ok"))
+    await tick()
+    flushTimers(src.timers, 150)
+    expect(got1).toEqual([{ type: "text-append", kind: "text", messageID: "m1", text: "ok" }])
+    expect(got2).toEqual(got1)
+    expect(src.count()).toBe(1) // 抛错那次未登记流，成功的这次登记 1 条
+    hub.dispose()
+  })
+
+  test("next() reject（订阅流真抛错）→ log 记录并标记死亡；下次 attach 重订阅且帧可达", async () => {
+    const src = fakeSource()
+    const realSubscribe = src.deps.subscribe
+    let calls = 0
+    src.deps.subscribe = () => {
+      calls++
+      if (calls === 1) {
+        // 首个流 next() 直接 reject：走 pump 的 catch 分支（区别于 fail 的「以结束代替抛错」）
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: () => Promise.reject(new Error("总线崩溃")),
+          }),
+        } as unknown as AsyncIterable<LiveEvent>
+      }
+      return realSubscribe()
+    }
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    hub.attach("s1", (f) => got.push(f))
+    await tick()
+    expect(src.logs.length).toBeGreaterThan(0) // catch 分支有日志
+    hub.attach("s2", (f) => got.push(f)) // 已标记死亡 → 这次 attach 重订阅
+    src.last().push(DELTA("s2", "m2", "ok"))
+    await tick()
+    flushTimers(src.timers, 150)
+    expect(got).toEqual([{ type: "text-append", kind: "text", messageID: "m2", text: "ok" }])
+    expect(src.count()).toBe(1) // 重订阅发生在第二个流上
+    hub.dispose()
+  })
+
+  test("形态不全的 delta 与归一化为 null 的 content 不产帧（hub 层契约）", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    hub.attach("s1", (f) => got.push(f))
+    // assistantMessageID 缺失：形态不全，进缓冲前丢弃
+    src.last().push({ type: "session.text.delta", data: { sessionID: "s1", ordinal: 0, delta: "x" } })
+    // delta 非字符串：同样丢弃
+    src.last().push({
+      type: "session.text.delta",
+      data: { sessionID: "s1", assistantMessageID: "m1", ordinal: 0, delta: 42 },
+    })
+    // content 归一化后为 null（空 parts）：null 不是帧，hub 不得发出（跨任务契约）
+    src.last().push({ type: "session.message.content.updated", data: { sessionID: "s1", messageID: "m1", content: [] } })
+    await tick()
+    flushTimers(src.timers, 150)
+    expect(got).toEqual([])
+    hub.dispose()
+  })
+
+  test("reasoning delta 映射为 reasoning kind 的 text-append 帧", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    hub.attach("s1", (f) => got.push(f))
+    src.last().push({
+      type: "session.reasoning.delta",
+      data: { sessionID: "s1", assistantMessageID: "m1", ordinal: 0, delta: "思考" },
+    })
+    await tick()
+    flushTimers(src.timers, 150)
+    expect(got).toEqual([{ type: "text-append", kind: "reasoning", messageID: "m1", text: "思考" }])
+    hub.dispose()
   })
 })

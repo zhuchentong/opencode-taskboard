@@ -241,9 +241,18 @@ export function createLiveHub(deps: LiveHubDeps, opts?: { flushMs?: number }): {
   /** 注册表空→非空、或原订阅已死亡时（重）建订阅循环 */
   const ensureSubscribed = (): void => {
     if (disposed || subscribed) return
+    let stream: AsyncIterable<LiveEvent>
+    try {
+      stream = deps.subscribe()
+    } catch (err) {
+      // 同步抛错（如瞬态总线故障）：不上抛给 attach 调用方，也保持「未订阅」——
+      // 若先置位再抛，会留下没有 pump 在跑的假订阅，之后任何 attach 都被挡回（僵尸化）
+      deps.log(`[live] 事件订阅创建失败，保持未订阅，待下次 attach 重试：${String(err)}`)
+      return
+    }
     subscribed = true
     epoch++
-    void pump(epoch, deps.subscribe())
+    void pump(epoch, stream)
   }
 
   return {
