@@ -81,7 +81,7 @@ const cap = (s: string, n: number): { text: string; truncated: boolean } =>
   s.length > n ? { text: s.slice(0, n), truncated: true } : { text: s, truncated: false }
 
 /** 归一化单个 part 原始 JSON；step-start/step-finish 返回 null（不输出） */
-function normalizePart(raw: Record<string, unknown>): ContextPart | null {
+export function normalizePart(raw: Record<string, unknown>): ContextPart | null {
   const type = raw.type
   if (type === "step-start" || type === "step-finish") return null
   if (type === "text" || type === "reasoning") {
