@@ -6,6 +6,8 @@
 // 设计要点：
 // - delta 合帧：模型流式输出是逐 token 的小片段，直接广播会让前端渲染抖动。
 //   这里按 (kind, messageID) 分桶拼串，flush 一次性产出整段文本帧。
+// - 帧序：回合收尾（execution.succeeded/failed）时先冲刷该会话的 delta 缓冲再广播
+//   message-end，保证 text-append 排在结束帧之前——前端按帧序定格，顺序倒了消息会卡在流式态。
 // - content 归一化：事件的 part 与库里的 part 形态有差异（工具名、工具输出、入参），
 //   先在 toRawPart 适配层补齐，再复用 context.ts 的 normalizePart，
 //   保证 live 帧的 part 形态与快照 parts 完全一致。
@@ -179,6 +181,22 @@ export function createLiveHub(deps: LiveHubDeps, opts?: { flushMs?: number }): {
     for (const send of set) send(frame)
   }
 
+  /**
+   * 冲刷某会话的 delta 缓冲并广播：flush 自带清空（幂等），产出帧按序发出。
+   * 观看者已归零则连缓冲一起丢弃。
+   */
+  const flushSession = (sessionID: string): void => {
+    const buf = buffers.get(sessionID)
+    if (!buf) return
+    const frames = buf.flush()
+    if (!frames.length) return
+    if (!watchers.has(sessionID)) {
+      buffers.delete(sessionID)
+      return
+    }
+    for (const frame of frames) broadcast(sessionID, frame)
+  }
+
   const handle = (ev: LiveEvent): void => {
     const sessionID = ev.data.sessionID
     if (typeof sessionID !== "string" || !watchers.has(sessionID)) return
@@ -201,6 +219,9 @@ export function createLiveHub(deps: LiveHubDeps, opts?: { flushMs?: number }): {
       return
     }
     if (ev.type === "session.execution.succeeded" || ev.type === "session.execution.failed") {
+      // 结束信号必须排在文本之后：先把缓冲里的增量冲出去再广播 message-end。
+      // 否则前端先定格、随后的 text-append 又把它置回流式态，消息永远卡在流式渲染。
+      flushSession(sessionID)
       broadcast(sessionID, { type: "message-end", messageID: null }) // 回合收尾即消息结束
       return
     }
@@ -209,15 +230,7 @@ export function createLiveHub(deps: LiveHubDeps, opts?: { flushMs?: number }): {
   /** 定时合帧：flush 自带清空；此刻已无观看者的会话整批帧随之丢弃，不留脏缓冲 */
   const flush = (): void => {
     if (disposed) return
-    for (const [sessionID, buf] of buffers) {
-      const frames = buf.flush()
-      if (!frames.length) continue
-      if (!watchers.has(sessionID)) {
-        buffers.delete(sessionID)
-        continue
-      }
-      for (const frame of frames) broadcast(sessionID, frame)
-    }
+    for (const sessionID of [...buffers.keys()]) flushSession(sessionID)
   }
 
   const timer = deps.setInterval(flush, flushMs)

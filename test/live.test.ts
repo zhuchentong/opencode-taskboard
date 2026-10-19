@@ -297,6 +297,44 @@ describe("createLiveHub", () => {
     hub.dispose()
   })
 
+  test("回合收尾先冲刷 delta 缓冲：text-append 排在 message-end 之前", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    hub.attach("s1", (f) => got.push(f))
+    src.last().push(DELTA("s1", "m1", "hi"))
+    await tick()
+    expect(got).toEqual([]) // 增量还在缓冲里：未到 150ms tick，不该出帧
+    src.last().push({ type: "session.execution.succeeded", data: { sessionID: "s1" } })
+    await tick()
+    expect(got).toEqual([
+      { type: "text-append", kind: "text", messageID: "m1", text: "hi" },
+      { type: "message-end", messageID: null },
+    ])
+    flushTimers(src.timers, 150) // 缓冲已冲空：定时器不得再补发同一段文本
+    expect(got).toEqual([
+      { type: "text-append", kind: "text", messageID: "m1", text: "hi" },
+      { type: "message-end", messageID: null },
+    ])
+    hub.dispose()
+  })
+
+  test("execution.failed 收尾同样先冲刷 delta 缓冲再广播 message-end", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    hub.attach("s1", (f) => got.push(f))
+    src.last().push(DELTA("s1", "m1", "半句"))
+    await tick()
+    src.last().push({ type: "session.execution.failed", data: { sessionID: "s1" } })
+    await tick()
+    expect(got).toEqual([
+      { type: "text-append", kind: "text", messageID: "m1", text: "半句" },
+      { type: "message-end", messageID: null },
+    ])
+    hub.dispose()
+  })
+
   test("detach 全部观看者后 emit 不产生帧；重新 attach 不残留旧缓冲且复用订阅", async () => {
     const src = fakeSource()
     const hub = createLiveHub(src.deps)
