@@ -4,6 +4,7 @@
   import { Input } from "$lib/components/ui/input"
   import { Textarea } from "$lib/components/ui/textarea"
   import { Badge } from "$lib/components/ui/badge"
+  import DirectoryPicker from "./DirectoryPicker.svelte"
   import { createProject, updateProject, deleteProject } from "$lib/api"
   import { confirmDialog, notify } from "$lib/notify"
   import type { Project } from "$lib/types"
@@ -25,6 +26,7 @@
   let workspace = $state("")
   let description = $state("")
   let submitting = $state(false)
+  let pickerOpen = $state(false)
   const canSubmit = $derived(name.trim().length > 0 && workspace.trim().length > 0 && !submitting)
 
   function openNew() {
@@ -120,7 +122,10 @@
     {:else}
       <form class="grid gap-2.5" onsubmit={submit}>
         <Input bind:value={name} placeholder="项目名称（必填）" aria-label="项目名称" required />
-        <Input bind:value={workspace} placeholder="工作区绝对路径（必填，如 /home/me/repos/gateway）" aria-label="工作区目录" required />
+        <div class="flex gap-1.5">
+          <Input bind:value={workspace} placeholder="工作区绝对路径（必填，如 /home/me/repos/gateway）" aria-label="工作区目录" required />
+          <Button type="button" variant="outline" class="shrink-0" onclick={() => (pickerOpen = true)}>浏览…</Button>
+        </div>
         <Textarea bind:value={description} placeholder="描述（可选）" aria-label="项目描述" rows="2"></Textarea>
         <p class="text-xs text-muted-foreground">工作区必须是本机存在的绝对路径目录；该项目的任务将由 worker 在此目录内执行。</p>
         <Dialog.Footer class="gap-2">
@@ -131,5 +136,7 @@
         </Dialog.Footer>
       </form>
     {/if}
+
+    <DirectoryPicker bind:open={pickerOpen} initial={workspace} onpick={(p) => (workspace = p)} />
   </Dialog.Content>
 </Dialog.Root>
