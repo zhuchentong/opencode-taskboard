@@ -8,6 +8,8 @@
 //   这里按 (kind, messageID) 分桶拼串，flush 一次性产出整段文本帧。
 // - 帧序：回合收尾（execution.succeeded/failed）时先冲刷该会话的 delta 缓冲再广播
 //   message-end，保证 text-append 排在结束帧之前——前端按帧序定格，顺序倒了消息会卡在流式态。
+// - 回合结束态：结束帧之后到达的迟到帧（delta/content）照常广播，紧跟一条 message-end 重新定格，
+//   守住不变量「一个回合的最后一帧永远是 message-end」——既不丢内容，也不会卡在流式态。
 // - content 归一化：事件的 part 与库里的 part 形态有差异（工具名、工具输出、入参），
 //   先在 toRawPart 适配层补齐，再复用 context.ts 的 normalizePart，
 //   保证 live 帧的 part 形态与快照 parts 完全一致。
@@ -160,6 +162,8 @@ export interface LiveHubDeps {
  *   观看者归零不关订阅——浏览器频繁开关页面不该抖动总线。
  * - delta 走每会话独立 DeltaBuffer，flushMs 定时合帧；content 与结束类事件即时广播，不等 flush。
  * - 非观看会话的事件在进缓冲前就丢弃：不替没人看的会话攒内存，也避免旧缓冲漏给后来的观看者。
+ * - 回合结束态（endedTurns）：结束帧之后到达的迟到帧照常广播，紧跟一条 message-end 重新定格，
+ *   守住不变量「一个回合的最后一帧永远是 message-end」；新回合由 session.execution.started 复位。
  */
 export function createLiveHub(deps: LiveHubDeps, opts?: { flushMs?: number }): {
   /** 注册观看者，返回 detach（幂等）；sessionID 是注册表键（一任务一会话，观看会话唯一） */
@@ -171,6 +175,10 @@ export function createLiveHub(deps: LiveHubDeps, opts?: { flushMs?: number }): {
   const watchers = new Map<string, Set<(frame: LiveFrame) => void>>()
   /** 每会话一个 delta 合帧缓冲（懒建；末位观看者离开即连同丢弃） */
   const buffers = new Map<string, ReturnType<typeof createDeltaBuffer>>()
+  /** 回合结束态：sessionID → 当前回合是否已结束。结束后的迟到帧要补 message-end 重新定格 */
+  const endedTurns = new Map<string, boolean>()
+  /** 待补定格的会话：回合结束后到达的 delta 已入缓冲，冲刷之后要补一条 message-end */
+  const pendingRefreeze = new Set<string>()
   let subscribed = false // 订阅循环是否在跑（false = 未启动或已死亡，attach 时需重建）
   let disposed = false
   let epoch = 0 // 订阅世代：重订阅/停机即自增，旧循环迟到的续体按世代静默作废
@@ -183,18 +191,22 @@ export function createLiveHub(deps: LiveHubDeps, opts?: { flushMs?: number }): {
 
   /**
    * 冲刷某会话的 delta 缓冲并广播：flush 自带清空（幂等），产出帧按序发出。
-   * 观看者已归零则连缓冲一起丢弃。
+   * 观看者已归零则连缓冲一起丢弃（结束态同生命周期，一并清掉）。
    */
   const flushSession = (sessionID: string): void => {
     const buf = buffers.get(sessionID)
     if (!buf) return
     const frames = buf.flush()
+    const late = pendingRefreeze.delete(sessionID) // 迟到帧（回合结束后到达）：冲刷后补定格
     if (!frames.length) return
     if (!watchers.has(sessionID)) {
       buffers.delete(sessionID)
+      endedTurns.delete(sessionID)
       return
     }
     for (const frame of frames) broadcast(sessionID, frame)
+    // 补定格：迟到帧不能让前端停在流式态（一个回合的最后一帧永远是 message-end）
+    if (late) broadcast(sessionID, { type: "message-end", messageID: null })
   }
 
   const handle = (ev: LiveEvent): void => {
@@ -211,18 +223,32 @@ export function createLiveHub(deps: LiveHubDeps, opts?: { flushMs?: number }): {
         buffers.set(sessionID, buf)
       }
       buf.push(kind, messageID, delta) // ordinal 是 part 索引、与 delta 顺序无关，刻意不用
+      if (endedTurns.get(sessionID)) pendingRefreeze.add(sessionID) // 迟到帧：冲刷后补 message-end
       return
     }
     if (ev.type === "session.message.content.updated") {
       const frame = contentUpdatedFrame(ev.data)
-      if (frame) broadcast(sessionID, frame) // null（空 parts/缺 id）直接丢弃，不产空帧
+      if (!frame) return // null（空 parts/缺 id）直接丢弃，不产空帧
+      broadcast(sessionID, frame)
+      if (endedTurns.get(sessionID)) {
+        // 迟到帧：内容照发（不丢数据），紧跟一条 message-end 重新定格
+        broadcast(sessionID, { type: "message-end", messageID: null })
+      }
+      return
+    }
+    if (ev.type === "session.execution.started") {
+      // 新回合开始：结束态复位，之后的帧不再被补 message-end 提前定格
+      // （pendingRefreeze 保留：已入缓冲的迟到帧仍属上一回合，冲刷后要补定格）
+      endedTurns.delete(sessionID)
       return
     }
     if (ev.type === "session.execution.succeeded" || ev.type === "session.execution.failed") {
       // 结束信号必须排在文本之后：先把缓冲里的增量冲出去再广播 message-end。
       // 否则前端先定格、随后的 text-append 又把它置回流式态，消息永远卡在流式渲染。
+      pendingRefreeze.delete(sessionID) // 结束分支紧跟一条 message-end，无需再补
       flushSession(sessionID)
       broadcast(sessionID, { type: "message-end", messageID: null }) // 回合收尾即消息结束
+      endedTurns.set(sessionID, true) // 之后的迟到帧要补定格
       return
     }
   }
@@ -286,6 +312,8 @@ export function createLiveHub(deps: LiveHubDeps, opts?: { flushMs?: number }): {
         if (current.size === 0) {
           watchers.delete(sessionID)
           buffers.delete(sessionID) // 观看者归零：缓冲随之丢弃，重新 attach 从干净状态开始
+          endedTurns.delete(sessionID) // 结束态与缓冲同生命周期：一并丢弃
+          pendingRefreeze.delete(sessionID)
         }
       }
     },
@@ -295,6 +323,8 @@ export function createLiveHub(deps: LiveHubDeps, opts?: { flushMs?: number }): {
       deps.clearInterval(timer)
       watchers.clear()
       buffers.clear()
+      endedTurns.clear()
+      pendingRefreeze.clear()
       epoch++ // 在途 pump 的尾巴按世代作废，不再处理任何迟到事件
       subscribed = false
     },

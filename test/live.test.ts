@@ -335,6 +335,89 @@ describe("createLiveHub", () => {
     hub.dispose()
   })
 
+  test("回合结束后到达的 content 帧：内容照发，紧跟一条 message-end 重新定格", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    hub.attach("s1", (f) => got.push(f))
+    src.last().push({ type: "session.execution.succeeded", data: { sessionID: "s1" } })
+    await tick()
+    expect(got).toEqual([{ type: "message-end", messageID: null }])
+    src.last().push({
+      type: "session.message.content.updated",
+      data: { sessionID: "s1", messageID: "m1", content: [{ type: "text", text: "收尾" }] },
+    })
+    await tick()
+    // 迟到帧不丢内容，其后紧跟 message-end：前端不会停在流式态（一个回合的最后一帧永远是 message-end）
+    expect(got).toEqual([
+      { type: "message-end", messageID: null },
+      { type: "content", messageID: "m1", parts: [{ type: "text", text: "收尾" }] },
+      { type: "message-end", messageID: null },
+    ])
+    hub.dispose()
+  })
+
+  test("回合结束后到达的 delta：冲刷后紧跟一条 message-end 重新定格", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    hub.attach("s1", (f) => got.push(f))
+    src.last().push({ type: "session.execution.succeeded", data: { sessionID: "s1" } })
+    await tick()
+    src.last().push(DELTA("s1", "m1", "迟到的字"))
+    await tick()
+    expect(got).toEqual([{ type: "message-end", messageID: null }]) // 增量还压在缓冲里
+    flushTimers(src.timers, 150)
+    expect(got).toEqual([
+      { type: "message-end", messageID: null },
+      { type: "text-append", kind: "text", messageID: "m1", text: "迟到的字" },
+      { type: "message-end", messageID: null },
+    ])
+    hub.dispose()
+  })
+
+  test("session.execution.started 复位：新回合的帧不再被追加 message-end", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    hub.attach("s1", (f) => got.push(f))
+    src.last().push({ type: "session.execution.succeeded", data: { sessionID: "s1" } })
+    await tick()
+    src.last().push({ type: "session.execution.started", data: { sessionID: "s1" } })
+    await tick()
+    src.last().push({
+      type: "session.message.content.updated",
+      data: { sessionID: "s1", messageID: "m2", content: [{ type: "text", text: "新回合" }] },
+    })
+    await tick()
+    expect(got).toEqual([
+      { type: "message-end", messageID: null },
+      { type: "content", messageID: "m2", parts: [{ type: "text", text: "新回合" }] },
+    ]) // 新回合的流式过程未被提前定格
+    hub.dispose()
+  })
+
+  test("末位观看者离开时结束态与缓冲一并清掉：重新 attach 后迟到帧不再补定格", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    const detach = hub.attach("s1", (f) => got.push(f))
+    src.last().push({ type: "session.execution.succeeded", data: { sessionID: "s1" } })
+    await tick()
+    detach() // 观看者归零：缓冲与结束态一并丢弃
+    hub.attach("s1", (f) => got.push(f))
+    src.last().push({
+      type: "session.message.content.updated",
+      data: { sessionID: "s1", messageID: "m1", content: [{ type: "text", text: "x" }] },
+    })
+    await tick()
+    expect(got).toEqual([
+      { type: "message-end", messageID: null },
+      { type: "content", messageID: "m1", parts: [{ type: "text", text: "x" }] },
+    ]) // 结束态已随缓冲清掉：不再补 message-end
+    hub.dispose()
+  })
+
   test("detach 全部观看者后 emit 不产生帧；重新 attach 不残留旧缓冲且复用订阅", async () => {
     const src = fakeSource()
     const hub = createLiveHub(src.deps)
