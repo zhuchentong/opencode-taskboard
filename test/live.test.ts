@@ -418,6 +418,83 @@ describe("createLiveHub", () => {
     hub.dispose()
   })
 
+  // —— 规格 §6：订阅流中途结束/异常 → 给所有活跃观看者发 message-end ——
+
+  test("订阅流结束 → 给所有活跃观看者各发一条 message-end，并照常记日志", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got1: LiveFrame[] = []
+    const got2: LiveFrame[] = []
+    hub.attach("s1", (f) => got1.push(f))
+    hub.attach("s2", (f) => got2.push(f))
+    src.last().fail(new Error("断连"))
+    await tick()
+    expect(got1).toEqual([{ type: "message-end", messageID: null }])
+    expect(got2).toEqual([{ type: "message-end", messageID: null }])
+    expect(src.logs.length).toBeGreaterThan(0) // 照常记日志
+    hub.dispose()
+  })
+
+  test("订阅流抛错（next() reject）→ 同样给活跃观看者发 message-end", async () => {
+    const src = fakeSource()
+    src.deps.subscribe = () =>
+      ({
+        [Symbol.asyncIterator]: () => ({
+          next: () => Promise.reject(new Error("总线崩溃")),
+        }),
+      }) as unknown as AsyncIterable<LiveEvent>
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    hub.attach("s1", (f) => got.push(f))
+    await tick()
+    expect(got).toEqual([{ type: "message-end", messageID: null }])
+    expect(src.logs.length).toBeGreaterThan(0)
+    hub.dispose()
+  })
+
+  test("订阅流死亡 → 缓冲里的增量先发出再发 message-end（不丢内容、帧序不倒）", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    hub.attach("s1", (f) => got.push(f))
+    src.last().push(DELTA("s1", "m1", "最后一句"))
+    await tick()
+    expect(got).toEqual([]) // 增量还压在缓冲里
+    src.last().fail(new Error("断连"))
+    await tick()
+    expect(got).toEqual([
+      { type: "text-append", kind: "text", messageID: "m1", text: "最后一句" },
+      { type: "message-end", messageID: null },
+    ])
+    hub.dispose()
+  })
+
+  test("订阅流死亡后重订阅：结束态不残留，新订阅的帧不被追加尾随 message-end", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    hub.attach("s1", (f) => got.push(f))
+    src.last().push({ type: "session.execution.succeeded", data: { sessionID: "s1" } })
+    await tick()
+    src.last().fail(new Error("断连")) // 订阅死亡：结束态随订阅一并清掉
+    await tick()
+    hub.attach("s2", (f) => got.push(f)) // 触发重订阅
+    await tick()
+    src.last().push({
+      type: "session.message.content.updated",
+      data: { sessionID: "s1", messageID: "m1", content: [{ type: "text", text: "新订阅的帧" }] },
+    })
+    await tick()
+    expect(got[got.length - 1]).toEqual({
+      type: "content",
+      messageID: "m1",
+      parts: [{ type: "text", text: "新订阅的帧" }],
+    })
+    // 结束帧共 2 条：回合收尾 1 条 + 订阅死亡 1 条；重订阅后到达的帧不再被追加
+    expect(got.filter((f) => f.type === "message-end").length).toBe(2)
+    hub.dispose()
+  })
+
   test("detach 全部观看者后 emit 不产生帧；重新 attach 不残留旧缓冲且复用订阅", async () => {
     const src = fakeSource()
     const hub = createLiveHub(src.deps)
@@ -448,11 +525,16 @@ describe("createLiveHub", () => {
     src.last().fail(new Error("断连"))
     await tick()
     expect(src.logs.length).toBeGreaterThan(0)
+    // 规格 §6：订阅流中途结束 → 给活跃观看者发 message-end（前端据此定格并暴露「已停止」）
+    expect(got).toEqual([{ type: "message-end", messageID: null }])
     hub.attach("s2", (f) => got.push(f)) // 触发重订阅
     src.last().push(DELTA("s2", "m2", "ok"))
     await tick()
     flushTimers(src.timers, 150)
-    expect(got).toEqual([{ type: "text-append", kind: "text", messageID: "m2", text: "ok" }]) // s2 观看者确实收到帧
+    expect(got).toEqual([
+      { type: "message-end", messageID: null },
+      { type: "text-append", kind: "text", messageID: "m2", text: "ok" },
+    ]) // s2 观看者确实收到帧
     expect(src.count()).toBe(2)
     hub.dispose()
   })
@@ -519,7 +601,10 @@ describe("createLiveHub", () => {
     src.last().push(DELTA("s2", "m2", "ok"))
     await tick()
     flushTimers(src.timers, 150)
-    expect(got).toEqual([{ type: "text-append", kind: "text", messageID: "m2", text: "ok" }])
+    expect(got).toEqual([
+      { type: "message-end", messageID: null },
+      { type: "text-append", kind: "text", messageID: "m2", text: "ok" },
+    ])
     expect(src.count()).toBe(1) // 重订阅发生在第二个流上
     hub.dispose()
   })

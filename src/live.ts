@@ -10,6 +10,8 @@
 //   message-end，保证 text-append 排在结束帧之前——前端按帧序定格，顺序倒了消息会卡在流式态。
 // - 回合结束态：结束帧之后到达的迟到帧（delta/content）照常广播，紧跟一条 message-end 重新定格，
 //   守住不变量「一个回合的最后一帧永远是 message-end」——既不丢内容，也不会卡在流式态。
+// - 订阅死亡收尾：订阅流中途结束/异常时（live-only 契约，规格 §6），先把缓冲里的增量冲出去，
+//   再给所有活跃观看者发 message-end——否则 SSE 不报错、前端静默冻在「实时」状态，只能手动刷新。
 // - content 归一化：事件的 part 与库里的 part 形态有差异（工具名、工具输出、入参），
 //   先在 toRawPart 适配层补齐，再复用 context.ts 的 normalizePart，
 //   保证 live 帧的 part 形态与快照 parts 完全一致。
@@ -164,6 +166,8 @@ export interface LiveHubDeps {
  * - 非观看会话的事件在进缓冲前就丢弃：不替没人看的会话攒内存，也避免旧缓冲漏给后来的观看者。
  * - 回合结束态（endedTurns）：结束帧之后到达的迟到帧照常广播，紧跟一条 message-end 重新定格，
  *   守住不变量「一个回合的最后一帧永远是 message-end」；新回合由 session.execution.started 复位。
+ * - 订阅死亡（live-only 契约，规格 §6）：订阅流中途结束/异常时给所有活跃观看者发 message-end
+ *   并清掉本轮结束态；下一观看者到来时重订阅（新订阅不继承旧结束态）。
  */
 export function createLiveHub(deps: LiveHubDeps, opts?: { flushMs?: number }): {
   /** 注册观看者，返回 detach（幂等）；sessionID 是注册表键（一任务一会话，观看会话唯一） */
@@ -187,6 +191,19 @@ export function createLiveHub(deps: LiveHubDeps, opts?: { flushMs?: number }): {
     const set = watchers.get(sessionID)
     if (!set) return
     for (const send of set) send(frame)
+  }
+
+  /** 向所有活跃观看者广播一帧（跨会话）：订阅流死亡时用来统一收尾 */
+  const broadcastAll = (frame: LiveFrame): void => {
+    for (const set of watchers.values()) {
+      for (const send of set) send(frame)
+    }
+  }
+
+  /** 清掉本轮结束态：新订阅建立 / 订阅死亡后，旧结束态不该跨回合残留 */
+  const clearTurnStates = (): void => {
+    endedTurns.clear()
+    pendingRefreeze.clear()
   }
 
   /**
@@ -259,6 +276,20 @@ export function createLiveHub(deps: LiveHubDeps, opts?: { flushMs?: number }): {
     for (const sessionID of [...buffers.keys()]) flushSession(sessionID)
   }
 
+  /**
+   * 订阅流死亡收尾（规格 §6）：
+   * - 先把各会话缓冲里的增量冲出去：不丢内容，且保住「text-append 排在 message-end 之前」的
+   *   帧序（否则前端先定格、随后的 text-append 又把它置回流式态，消息卡在流式态）；
+   * - 再给所有活跃观看者发 message-end：前端据此定格并暴露「实时已停止」，
+   *   否则 SSE 连接不报错、前端静默冻在「实时」状态，只能靠用户手动刷新；
+   * - 最后清掉本轮结束态：订阅已死，结束态不该跨回合残留。
+   */
+  const onSubscriptionDead = (): void => {
+    for (const sessionID of [...buffers.keys()]) flushSession(sessionID)
+    broadcastAll({ type: "message-end", messageID: null })
+    clearTurnStates()
+  }
+
   const timer = deps.setInterval(flush, flushMs)
 
   async function pump(myEpoch: number, stream: AsyncIterable<LiveEvent>): Promise<void> {
@@ -270,10 +301,12 @@ export function createLiveHub(deps: LiveHubDeps, opts?: { flushMs?: number }): {
       if (disposed || myEpoch !== epoch) return
       subscribed = false
       deps.log("[live] 事件订阅流已结束，标记死亡，待下次 attach 重订阅")
+      onSubscriptionDead() // 规格 §6：给所有活跃观看者发 message-end
     } catch (err) {
       if (disposed || myEpoch !== epoch) return
       subscribed = false
       deps.log(`[live] 事件订阅流异常，标记死亡，待下次 attach 重订阅：${String(err)}`)
+      onSubscriptionDead() // 规格 §6：给所有活跃观看者发 message-end
     }
   }
 
@@ -291,6 +324,7 @@ export function createLiveHub(deps: LiveHubDeps, opts?: { flushMs?: number }): {
     }
     subscribed = true
     epoch++
+    clearTurnStates() // 新订阅拿到的是全新事件流，不继承上一条订阅的结束态
     void pump(epoch, stream)
   }
 
