@@ -84,31 +84,31 @@
 </script>
 
 <Dialog.Root bind:open>
-  <Dialog.Content class="sm:max-w-[520px]">
+  <Dialog.Content class="sm:max-w-[640px]">
     <Dialog.Header class="gap-1">
       <Dialog.Title class="text-sm">项目管理</Dialog.Title>
       <Dialog.Description class="sr-only">管理项目与 worker 工作区目录</Dialog.Description>
     </Dialog.Header>
 
     {#if formProject === null}
-      <div class="grid max-h-[60vh] gap-2 overflow-y-auto">
+      <div class="grid max-h-[60vh] grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2">
         {#each projects as p (p.id)}
-          <div class="flex items-center gap-3 rounded-lg border p-2.5">
-            <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-2">
-                <span class="truncate text-sm font-medium">{p.name}</span>
-                {#if p.builtin}
-                  <Badge variant="secondary" class="font-normal text-muted-foreground">内置</Badge>
-                {/if}
-              </div>
-              <div class="truncate text-xs text-muted-foreground" title={p.workspace}>{p.workspace}</div>
-              {#if p.description}
-                <div class="truncate text-xs text-muted-foreground">{p.description}</div>
+          <div class="flex flex-col gap-1.5 rounded-lg border p-3">
+            <div class="flex items-center gap-2">
+              <span class="truncate text-sm font-medium">{p.name}</span>
+              {#if p.builtin}
+                <Badge variant="secondary" class="font-normal text-muted-foreground">内置</Badge>
               {/if}
             </div>
+            <div class="truncate text-xs text-muted-foreground" title={p.workspace}>{p.workspace}</div>
+            {#if p.description}
+              <div class="line-clamp-2 text-xs text-muted-foreground" title={p.description}>{p.description}</div>
+            {/if}
             {#if !p.builtin}
-              <Button size="sm" variant="ghost" onclick={() => openEdit(p)}>编辑</Button>
-              <Button size="sm" variant="ghost" class="text-destructive" onclick={() => remove(p)}>删除</Button>
+              <div class="mt-auto flex justify-end gap-1 border-t pt-2">
+                <Button size="sm" variant="ghost" onclick={() => openEdit(p)}>编辑</Button>
+                <Button size="sm" variant="ghost" class="text-destructive" onclick={() => remove(p)}>删除</Button>
+              </div>
             {/if}
           </div>
         {/each}
