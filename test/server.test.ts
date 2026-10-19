@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, symlinkSync, chmodSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { createStore, memoryBackend } from "../src/store"
 import { createServer, type ServerHandle } from "../src/server"
 import { DEFAULT_PROJECT_ID, type Store } from "../src/types"
@@ -491,5 +491,56 @@ describe("项目 API 补遗(审查 I-1)", () => {
     const r = await fetch(`${base}/api/projects/${p.id}`)
     expect(r.status).toBe(200)
     expect(((await r.json()) as { id: string }).id).toBe(p.id)
+  })
+})
+
+describe("目录浏览路由", () => {
+  test("GET /api/fs/ls 只列目录,缺省 HOME,单条 stat 失败容错,超 500 截断", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    const base = await setup(s)
+    const root = mkdtempSync(join(tmpdir(), "fs-ls-"))
+    mkdirSync(join(root, "sub"))
+    writeFileSync(join(root, "file.txt"), "x")
+    symlinkSync(join(root, "gone"), join(root, "dangling")) // stat 失败条目
+    const r = await fetch(`${base}/api/fs/ls?path=${encodeURIComponent(root)}`)
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { path: string; parent: string | null; entries: Array<{ name: string; type: string }> }
+    expect(body.path).toBe(root)
+    expect(body.parent).toBe(dirname(root))
+    expect(body.entries.map((e) => e.name)).toEqual(["sub"]) // 文件与断链剔除
+    for (let i = 0; i < 501; i++) symlinkSync(root, join(root, `d${String(i).padStart(3, "0")}`))
+    const r2 = await fetch(`${base}/api/fs/ls?path=${encodeURIComponent(root)}`)
+    expect(((await r2.json()) as { entries: unknown[] }).entries.length).toBe(500)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  test("GET /api/fs/ls 非法路径 400 invalid_path;不存在 404 not_found;根目录 parent null", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    const base = await setup(s)
+    const bad = await fetch(`${base}/api/fs/ls?path=rel/path`)
+    expect(bad.status).toBe(400)
+    expect(((await bad.json()) as { error: { code: string } }).error.code).toBe("invalid_path")
+    const empty = await fetch(`${base}/api/fs/ls?path=`)
+    expect(empty.status).toBe(400)
+    const missing = await fetch(`${base}/api/fs/ls?path=${encodeURIComponent("/definitely/not/exist")}`)
+    expect(missing.status).toBe(404)
+    expect(((await missing.json()) as { error: { code: string } }).error.code).toBe("not_found")
+    const rootLs = await fetch(`${base}/api/fs/ls?path=${encodeURIComponent("/")}`)
+    expect(((await rootLs.json()) as { parent: string | null }).parent).toBe(null)
+  })
+
+  test("GET /api/fs/ls 无权限目录 403 forbidden(非 root 才可测)", async () => {
+    if (process.getuid?.() === 0) return
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    const base = await setup(s)
+    const root = mkdtempSync(join(tmpdir(), "fs-ls-"))
+    const locked = join(root, "locked")
+    mkdirSync(locked)
+    chmodSync(locked, 0o000)
+    const r = await fetch(`${base}/api/fs/ls?path=${encodeURIComponent(locked)}`)
+    expect(r.status).toBe(403)
+    expect(((await r.json()) as { error: { code: string } }).error.code).toBe("forbidden")
+    chmodSync(locked, 0o755) // 便于清理
+    rmSync(root, { recursive: true, force: true })
   })
 })

@@ -1,5 +1,7 @@
-import { isAbsolute, join } from "node:path"
+import { dirname, isAbsolute, join, resolve } from "node:path"
 import { statSync } from "node:fs"
+import { readdir, stat } from "node:fs/promises"
+import { homedir } from "node:os"
 import { StoreError } from "./types"
 import type { BoardSettings, Project, Store, Task } from "./types"
 
@@ -14,6 +16,8 @@ export interface ServerHandle {
 
 const SSE_HEARTBEAT_MS = 25_000
 const MAX_SSE_SUBSCRIBERS = 32
+/** 目录列表条目上限：超大目录（如 /usr）不整包返回，防选择器卡死 */
+const FS_LIST_CAP = 500
 
 type Subscriber = {
   controller: ReadableStreamDefaultController<Uint8Array>
@@ -99,6 +103,48 @@ export function createServer(
     }
     if (!isDir) throw new StoreError("invalid_input", `工作区不是目录：${workspace}`)
     return workspace
+  }
+
+  /**
+   * 目录浏览：项目工作区选路径的数据源，只读列目录。
+   * - 无鉴权与 tasks/logs/SSE 同姿态（127.0.0.1 绑定 + 写凭 token + 本机单用户）；
+   * - 有意不做路径沙箱：本机开发工具，用户需浏览任意绝对路径；
+   * - 次要实例各自本地处理（文件系统全机共享，无需代理主实例）。
+   */
+  async function handleFsList(url: URL): Promise<Response> {
+    const raw = url.searchParams.has("path") ? url.searchParams.get("path") ?? "" : homedir()
+    if (raw.trim() === "" || !isAbsolute(raw)) {
+      return Response.json({ error: { code: "invalid_path", message: `目录必须是绝对路径：${raw}` } }, { status: 400 })
+    }
+    const target = resolve(raw)
+    let dirents: Awaited<ReturnType<typeof readdir>>
+    try {
+      dirents = (await readdir(target, { withFileTypes: true })) as Awaited<ReturnType<typeof readdir>>
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === "EACCES" || code === "EPERM") {
+        return Response.json({ error: { code: "forbidden", message: `无权限读取目录：${target}` } }, { status: 403 })
+      }
+      return Response.json({ error: { code: "not_found", message: `目录不存在：${target}` } }, { status: 404 })
+    }
+    const entries: Array<{ name: string; path: string; type: "dir" }> = []
+    for (const d of dirents) {
+      const full = join(target, d.name)
+      // 单条 stat 失败（/proc 下 EPERM/EIO、断链 symlink）跳过该条目，不让整次列举失败
+      try {
+        if ((await stat(full)).isDirectory()) entries.push({ name: d.name, path: full, type: "dir" })
+      } catch {
+        continue
+      }
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+    const parent = dirname(target)
+    return Response.json({
+      path: target,
+      parent: parent === target ? null : parent,
+      home: homedir(),
+      entries: entries.slice(0, FS_LIST_CAP),
+    })
   }
 
   const encoder = new TextEncoder()
@@ -263,6 +309,7 @@ export function createServer(
         return Response.json({ ok: true })
       }
     }
+    if (pathname === "/api/fs/ls" && method === "GET") return handleFsList(new URL(req.url))
     if (pathname === "/api/tasks") {
       if (method === "GET") return Response.json(await store.list())
       if (method === "POST") {
