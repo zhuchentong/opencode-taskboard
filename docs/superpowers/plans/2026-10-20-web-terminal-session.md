@@ -1,5 +1,9 @@
 # 计划：web 终端打开 opencode session（任务详情弹窗「终端」Tab）
 
+> ⚠️ **2026-10-20 修订**：本文档正文的「sidecar 独立进程」方案已被**方案 1（插件内终端桥）**取代——
+> `tools/terminal-sidecar/` 已退役删除，终端桥改由看板主实例直接承载（用户零配置）。
+> 权威口径见文末「**方案 1 修订**」节；正文保留原方案作为决策历史与协议契约来源。
+
 ## 背景与目标
 
 当前「上下文」Tab 以消息流形式展示 worker 会话（Markdown + 实时增量）。用户希望改为：**在网页里通过 web 终端打开 opencode session**，用 opencode TUI 原生的显示与交互。
@@ -94,3 +98,88 @@ terminal-sidecar（独立 Node 进程，tools/terminal-sidecar/）
 3. TUI 全生命周期（打开/退出/daemon 重启后重连）**不引起 service 状态变化**（红线实证）；
 4. 双标签 attach 同一 tmux 会话体验；
 5. 会话不存在时 `--session` 的实际行为（配合 sidecar 的 404 短路）。
+
+---
+
+## 方案 1 修订（2026-10-20，取代正文的「sidecar 独立进程」方案）
+
+### 修订缘由
+
+正文方案把终端桥做成**用户手起的独立进程**（`tools/terminal-sidecar/`），动机是 AGENTS.md 的红线：
+「严禁在插件/daemon 进程内 exec `opencode` CLI」。方案 1 把桥**并入看板插件**，
+但**不违反**这条红线——插件进程只起 `tmux` 子进程，`opencode` TUI 由 **tmux server** 拉起（见下「红线如何被绕过」）。
+
+### 架构（方案 1 终稿）
+
+```
+浏览器 xterm.js（看板「终端」Tab 内）
+   │  ws://127.0.0.1:4370/api/tasks/<taskID>/terminal?token=<看板token>
+   ▼
+看板服务（插件主实例；src/server.ts 的 Bun.serve websocket handler）
+   │  src/terminal/bridge.ts（createTerminalBridge）
+   ├─ 存在性校验：ctx.session.get({sessionID}) → 404/不存在 → error 帧，**绝不 exec**
+   ├─ 服务发现：读 ~/.local/state/opencode/service.json（url + password）→ 失败 → error 帧，**绝不 exec**
+   └─ tmux 承载：`board-<sessionID>` 会话里跑 opencode --server <url> --session <id>
+        └─ 每个浏览器连接一个 attach 客户端：
+           script -qfc "stty rows H cols W; tmux attach-session -t board-<id>" /dev/null
+             └─ 动态 resize：tmux list-clients -t board-<id> -F '#{client_tty}'
+                             → stty -F <tty> cols W rows H（内核 SIGWINCH → tmux 客户端自适应）
+```
+
+### 红线如何被绕过（不违反「插件进程内不 exec opencode CLI」）
+
+插件进程**只**起 `tmux` 子进程；`opencode` TUI 由 **tmux server** 拉起，
+祖先链是 `opencode ← tmux:server ← systemd`，**daemon PID 不在链中**（账本「方案 1 可行性验证 ⑤」实测）。
+`opencode service restart` 只按注册 PID 发 SIGTERM→SIGKILL（单进程、非进程组、非按名扫杀），
+因此**不会**误杀 TUI。账本结论：方案 1 全部门通过（唯一未跑的字面动作 `opencode service restart` 留给用户）。
+
+### 与 sidecar 的差异
+
+| 维度 | sidecar（已退役） | 方案 1（插件内桥） |
+|---|---|---|
+| 进程 | 用户手起的独立 Node 进程 | 看板主实例内（插件进程的一部分） |
+| 启动 | 用户手动 `node src/index.js --token …` | 零配置：开看板即有 |
+| PTY | node-pty（原生模块） | `script` 包装（node-pty 在 Bun 1.4.2 下不可用：resize 报 ioctl EBADF、输出恒 0 字节） |
+| 改尺寸 | `pty.resize(cols, rows)` | `tmux list-clients` → `stty -F <tty> cols W rows H` |
+| 存在性校验 | HTTP `GET <daemon>/api/session/<id>` + Basic 认证 | 插件内 `ctx.session.get`（同进程 SDK 调用：无网络往返、不处理 daemon 凭据） |
+| 会话 cwd | `location.directory`（HTTP 响应体） | `location.directory`（SDK 返回体，同源） |
+| 握手门禁 | token + Origin 白名单 | 仅 token（query 参数）；同源页面天然满足 Origin 约束，CSWSH 面由 token 收口 |
+| 服务发现 | 启动时读一次 service.json | **每次建连**读一次（daemon 换端口/密码无需重启服务） |
+| 显式关闭 | `POST /close/<sessionID>` | 无（前端无此需求；tmux 会话由空闲回收器收） |
+| 空闲回收 | 客户端归零 30min → kill tmux 会话 | 同（`IdleReaper`，30min） |
+| 帧协议 | 二进制=字节流；文本 JSON（resize/error/exit） | 同 + **新增 `{"type":"ping"}`**（25s 应用层保活，兜底 WS idleTimeout 120s） |
+
+### 模块落点
+
+| 文件 | 职责 |
+|---|---|
+| `src/terminal/protocol.ts` | 帧协议常量与解析（二进制=字节流 / 文本=JSON） |
+| `src/terminal/service.ts` | daemon 地址与凭据发现（只读 service.json，坏 JSON/缺字段 → 中文错误） |
+| `src/terminal/tmux.ts` | tmux 会话管理（建/挂/回收/改尺寸；参数数组不经 shell） |
+| `src/terminal/pty.ts` | PTY 启动器（`script` 包装 + shell 参数白名单） |
+| `src/terminal/idle.ts` | 空闲回收器（客户端归零 → 超时 kill tmux 会话） |
+| `src/terminal/bridge.ts` | 桥接主体（校验 → 会话 → 帧收发 → 退出传播 → 空闲回收） |
+| `src/server.ts` | 路由 `GET /api/tasks/:id/terminal`（token 门禁 → 升级 WS）+ `Bun.serve` 的 websocket handler（idleTimeout 120） |
+| `src/index.ts` | **仅主实例**注入 `opts.terminal`（同 dispatcher 姿态）；插件卸载时 `terminal.close()`（只关自身连接与子进程，**不动 tmux 会话**） |
+
+### 验证结论（引用账本）
+
+- 账本「方案 1 可行性验证」①~⑤：node-pty 不可用 → `script` 方案全通；Bun.serve WS 与 SSE 并发互不干扰；
+  `ctx.client.session.get` SDK 直用可用；TUI 在 tmux 内正常渲染并与 daemon 建立连接，进程祖先链不含 daemon。
+- 任务 3 实施期复验（自动化）：根 `bun test` 682 pass（基线 631 + 新增 51，0 fail）；
+  真 tmux 冒烟（假 TUI = `cat`，绝不碰 opencode）：attach / 输入回显 / resize（tmux 窗口 100x39）/ 退出帧 四步全通。
+
+### 任务划分（修订）
+
+原步骤 3「集成验收」拆为两个任务：
+
+- **任务 3（服务端）**：`src/terminal/**` + `src/server.ts` 接线 + `src/index.ts` 装配 + bun 用例 + sidecar 退役（git rm）。
+- **任务 4（前端）**：同源 `terminalWsUrl` + 看板 token、删 sidecar 配置与 `TerminalSettings.svelte`、Tab 条件简化、产物重建入库。
+
+人工 spike 仍由用户在**自己的终端**执行（会话内 exec opencode CLI 违反红线）。
+
+### 明确不做（修订）
+
+- ~~sidecar 并入插件进程~~ → **本次采纳**（方案 1）。
+- ~~看板服务端任何改动~~ → **本次采纳**（新增终端 WS 路由；其余路由与 SSE 行为零回归）。
+- 仍不做：多用户 / 非 localhost 暴露、通用 shell 终端、语法高亮、**在插件进程内 exec `opencode` CLI**。
