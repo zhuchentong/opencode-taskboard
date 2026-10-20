@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test"
-import { emptyHint, roleMeta, toolStateIcon, toolSummary, type ContextPart } from "../src/lib/context"
+import {
+  emptyHint,
+  loadReasoningPref,
+  roleMeta,
+  saveReasoningPref,
+  splitParts,
+  toolStateIcon,
+  toolSummary,
+  type ContextPart,
+} from "../src/lib/context"
 import type { Task } from "../src/lib/types"
 
 const T = (over: Partial<Task> = {}): Task => ({
@@ -76,5 +85,48 @@ describe("part 展示辅助", () => {
     expect(toolStateIcon({ type: "tool", tool: "read", state: "error" } as ContextPart)).toBe("✗")
     expect(toolStateIcon({ type: "tool", tool: "read", state: "running" } as ContextPart)).toBe("⏳")
     expect(toolStateIcon({ type: "tool", tool: "read" } as ContextPart)).toBe("·")
+  })
+})
+
+describe("splitParts · 思考过程显隐", () => {
+  const text: ContextPart = { type: "text", text: "正文" }
+  const think1: ContextPart = { type: "reasoning", text: "思考一" }
+  const think2: ContextPart = { type: "reasoning", text: "思考二" }
+  const tool: ContextPart = { type: "tool", tool: "read" }
+
+  test("开关开：原样返回（引用相等）且计数为 0", () => {
+    const parts = [think1, text, think2, tool]
+    const r = splitParts(parts, true)
+    expect(r.visible).toBe(parts)
+    expect(r.reasoningCount).toBe(0)
+  })
+
+  test("开关关：reasoning 全部滤掉，非 reasoning 保持原顺序", () => {
+    const r = splitParts([think1, text, think2, tool], false)
+    expect(r.visible).toEqual([text, tool])
+    expect(r.reasoningCount).toBe(2)
+  })
+
+  test("无 reasoning：visible 即原列表，计数 0", () => {
+    const r = splitParts([text, tool], false)
+    expect(r.visible).toEqual([text, tool])
+    expect(r.reasoningCount).toBe(0)
+  })
+
+  test("纯 reasoning：visible 为空数组，计数齐全", () => {
+    const r = splitParts([think1, think2], false)
+    expect(r.visible).toEqual([])
+    expect(r.reasoningCount).toBe(2)
+  })
+})
+
+describe("思考过程偏好读写（无 localStorage 环境静默容错）", () => {
+  test("bun 测试环境无 localStorage：默认关、写不抛、读仍为关", () => {
+    // 本仓库 bun 测试环境实测 globalThis.localStorage === undefined，
+    // 函数内部必须走可选链 + try/catch 静默回落——这里把该契约钉住
+    expect(globalThis.localStorage).toBeUndefined()
+    expect(loadReasoningPref()).toBe(false)
+    expect(() => saveReasoningPref(true)).not.toThrow()
+    expect(loadReasoningPref()).toBe(false)
   })
 })

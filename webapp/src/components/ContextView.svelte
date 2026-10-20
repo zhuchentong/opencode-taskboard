@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte"
   import { fetchTaskContext } from "$lib/api"
-  import { emptyHint, roleMeta, toolStateIcon, toolSummary, type ContextMessage } from "$lib/context"
+  import { emptyHint, loadReasoningPref, roleMeta, saveReasoningPref, splitParts, toolStateIcon, toolSummary, type ContextMessage } from "$lib/context"
   import {
     connectLiveContext,
     liveSessionID,
@@ -34,6 +34,15 @@
   let error = $state("")
   /** 实时连接态：live=实时中；reconnecting=断线退避重连中；off=未开启/已降级（终态） */
   let liveStatus = $state<LiveStatus>("off")
+  /**
+   * 「显示思考过程」开关：默认关（reasoning part 不渲染），偏好写 localStorage 记住。
+   * 隐藏时逐消息显示「💭 N」徽标提示有隐藏思考，点徽标可快捷打开。
+   */
+  let showReasoning = $state(loadReasoningPref())
+  function toggleReasoning() {
+    showReasoning = !showReasoning
+    saveReasoningPref(showReasoning)
+  }
   /** 当前实时订阅的键（任务 ID + 会话 ID）：键不变就不重建订阅（普通变量，不进响应式依赖） */
   let liveKey = ""
   /** 当前订阅句柄（seed 播种快照、dispose 收尾） */
@@ -167,6 +176,15 @@
     </span>
   {/if}
 
+  <button
+    type="button"
+    class="w-fit rounded-md border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent"
+    onclick={toggleReasoning}
+    title={showReasoning ? "隐藏 worker 的思考过程" : "显示 worker 的思考过程"}
+  >
+    {showReasoning ? "💭 隐藏思考过程" : "💭 显示思考过程"}
+  </button>
+
   {#if loading}
     <span class="py-6 text-center text-xs text-muted-foreground">加载上下文…</span>
   {:else if error}
@@ -187,28 +205,34 @@
     <span class="py-6 text-center text-xs text-muted-foreground">{emptyHint(task)}</span>
   {:else}
     {#each messages as m (m.id)}
+      {@const sp = splitParts(m.parts, showReasoning)}
       <div class="grid gap-1.5 rounded-lg border p-2.5">
         <div class="flex items-baseline gap-1.5 text-xs text-muted-foreground">
           <span>{roleMeta(m.role).icon} {roleMeta(m.role).label}</span>
           <span class="tabular-nums">{formatClock(m.time)}</span>
+          {#if sp.reasoningCount > 0}
+            <!-- 思考被隐藏时的占位提示；点击快捷打开开关 -->
+            <button
+              type="button"
+              class="rounded px-1 hover:bg-accent"
+              onclick={toggleReasoning}
+              title="显示思考过程"
+            >💭 {sp.reasoningCount} 段思考</button>
+          {/if}
         </div>
         <div class="grid gap-1.5">
-          {#each m.parts as p, i (i)}
+          {#each sp.visible as p, i (i)}
             {#if p.type === "text"}
-              {#if m.streaming}
-                <!-- 流式态：纯文本 + 闪烁光标（逐帧解析 markdown 太贵，半截 markdown 也会闪） -->
-                <pre class="whitespace-pre-wrap break-all text-sm">{p.text ?? ""}<span class="animate-caret-blink" aria-hidden="true">▍</span></pre>
-                {#if p.truncated}<span class="text-xs text-muted-foreground">（已截断）</span>{/if}
-              {:else}
+              <!-- 流式也走 markdown 实时预览：每帧只重解析这一条消息，8KB 封顶实测 ~3ms（150ms 合帧下无压力）；
+                   光标经 caret prop 挂在末尾（光标注入源码会被渲染成字面量） -->
+              <Markdown source={p.text ?? ""} caret={m.streaming === true} />
+              {#if p.truncated}<span class="text-xs text-muted-foreground">（已截断）</span>{/if}
+            {:else if p.type === "reasoning"}
+              <div>
+                <div class="text-xs text-muted-foreground"><span class="mr-1" aria-hidden="true">💭</span>思考过程{#if p.truncated}（已截断）{/if}</div>
                 <div class="prose prose-sm dark:prose-invert max-w-none wrap-anywhere">
                   <Markdown source={p.text ?? ""} />
-                  {#if p.truncated}<span class="text-xs text-muted-foreground">（已截断）</span>{/if}
                 </div>
-              {/if}
-            {:else if p.type === "reasoning"}
-              <div class="rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">
-                <span class="mr-1" aria-hidden="true">💭</span>{p.text}
-                {#if p.truncated}（已截断）{/if}
               </div>
             {:else if p.type === "tool"}
               <details class="rounded-md border text-xs">

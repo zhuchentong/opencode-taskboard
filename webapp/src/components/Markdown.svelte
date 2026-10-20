@@ -1,12 +1,17 @@
 <script lang="ts">
   import { renderMarkdown } from "../lib/markdown"
 
-  let { source }: { source: string } = $props()
+  /**
+   * caret=true 时在内容末尾画闪烁光标（流式实时预览用）。
+   * 光标经 .md-body > :last-child::after 落在最后一个块级元素内部——紧跟最后一个字符，
+   * 而不是往 markdown 源码里塞字符（那会被渲染成字面量）或在块外另起一行。
+   */
+  let { source, caret = false }: { source: string; caret?: boolean } = $props()
   const html = $derived(renderMarkdown(source))
 </script>
 
 <!-- {@html} 在此安全：渲染器 html:false，注入内容只含转义后的文本与受白名单约束的链接 -->
-<div class="md-body">{@html html}</div>
+<div class="md-body" class:caret-on={caret}>{@html html}</div>
 
 <style>
   /* 正文内嵌卡片：底色与面板 --col 拉开一档，长文可读性更好。
@@ -21,6 +26,24 @@
     padding: 10px 12px;
     color: var(--text);
     overflow-wrap: anywhere;
+  }
+
+  /* 流式光标：挂在最后一个块级元素内部的末尾（紧跟最后一个字符）。
+     目标节点来自 {@html}，Svelte 看不见 → 规则必须 :global（与上方面向 html 内节点的
+     既有规则同理），keyframes 也必须同在 global 块里——scoped @keyframes 会被哈希改名，
+     global 规则里的 animation-name 引用的是原始名，分开写就对不上了。 */
+  :global {
+    .md-body.caret-on > :last-child::after {
+      content: "▍";
+      margin-left: 2px;
+      animation: md-caret-blink 1.1s steps(2, start) infinite;
+    }
+
+    @keyframes md-caret-blink {
+      to {
+        visibility: hidden;
+      }
+    }
   }
 
   /* 注意：{@html} 注入的节点不带 Svelte 的作用域 class，

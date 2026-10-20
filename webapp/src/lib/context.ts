@@ -19,7 +19,7 @@ export interface ContextMessage {
   role: string
   time: number
   parts: ContextPart[]
-  /** 实时流式中：text/reasoning part 以纯文本渲染，message-end 后切 markdown */
+  /** 实时流式中：text/reasoning part 走 markdown 实时预览（光标由 Markdown 组件渲染），message-end 后定格 */
   streaming?: boolean
 }
 
@@ -90,4 +90,50 @@ export function emptyHint(task: Task): string {
   if (!task.claim) return "任务尚未开工，还没有会话上下文"
   if (!task.claim.sessionID) return "本任务由用户手动执行，无会话上下文"
   return "会话暂无消息"
+}
+
+/**
+ * 按「显示思考过程」开关拆分一条消息的 parts：visible 是要渲染的 parts，
+ * reasoningCount 是被隐藏的思考段数（供「💭 N」徽标提示）。
+ * 开关打开时原样返回（引用相等，渲染层零开销）。
+ */
+export function splitParts(
+  parts: ContextPart[],
+  showReasoning: boolean,
+): { visible: ContextPart[]; reasoningCount: number } {
+  if (showReasoning) return { visible: parts, reasoningCount: 0 }
+  let reasoningCount = 0
+  const visible: ContextPart[] = []
+  for (const p of parts) {
+    if (p.type === "reasoning") {
+      reasoningCount++
+      continue
+    }
+    visible.push(p)
+  }
+  return { visible, reasoningCount }
+}
+
+/** 「显示思考过程」偏好的 localStorage 键 */
+const REASONING_PREF_KEY = "taskboard:context:show-reasoning"
+
+/**
+ * 读「显示思考过程」偏好（默认关）。
+ * bun 测试环境无 localStorage、浏览器隐私模式访问可能抛错——一律静默回落默认值。
+ */
+export function loadReasoningPref(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(REASONING_PREF_KEY) === "1"
+  } catch {
+    return false
+  }
+}
+
+/** 写「显示思考过程」偏好；写入失败（隐私模式/配额满）静默忽略，不影响功能 */
+export function saveReasoningPref(on: boolean): void {
+  try {
+    globalThis.localStorage?.setItem(REASONING_PREF_KEY, on ? "1" : "0")
+  } catch {
+    /* 忽略 */
+  }
 }

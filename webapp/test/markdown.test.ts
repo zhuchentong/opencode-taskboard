@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { renderMarkdown } from "../src/lib/markdown"
+import { autoFenceJson, renderMarkdown } from "../src/lib/markdown"
 
 /**
  * 剥标签 + 解码实体，得到可见文本（用于 round-trip 断言；trim 掉 render 尾部换行）。
@@ -85,6 +85,66 @@ describe("renderMarkdown · 边界与健壮性", () => {
     const html = renderMarkdown("```\n未闭合")
     expect(html).toContain("<pre>")
     expect(html).toContain("未闭合")
+  })
+})
+
+describe("裸 JSON 自动围栏（autoFenceJson）", () => {
+  test("裸单行 JSON 渲染为 json 代码块，内部不再被 markdown/linkify 解释", () => {
+    const html = renderMarkdown('{"result": 123, "url": "https://example.com/a", "note": "**不加粗**"}')
+    expect(html).toContain('<pre><code class="language-json">')
+    expect(html).not.toContain("<strong>")
+    expect(html).not.toContain("<a ")
+    expect(html).toContain("**不加粗**")
+  })
+
+  test("裸多行 JSON 同样围栏（换行进代码块而非 <br>）", () => {
+    const html = renderMarkdown('{\n  "items": [1, 2],\n  "note": "**不加粗**"\n}')
+    expect(html).toContain('<code class="language-json">')
+    expect(html).not.toContain("<strong>")
+    expect(html).toContain("[1, 2]")
+  })
+
+  test("流式半截 JSON（未闭合）也命中围栏——首字符判据与完整性无关", () => {
+    const html = renderMarkdown('{"result": 123, "items": [1,')
+    expect(html).toContain('<code class="language-json">')
+    expect(html).toContain("[1,")
+  })
+
+  test("[ 开头的完整 JSON 数组同样围栏", () => {
+    const html = renderMarkdown('[1, 2, {"a": "**b**"}]')
+    expect(html).toContain('<code class="language-json">')
+    expect(html).not.toContain("<strong>")
+  })
+
+  test("[ 开头的 markdown 链接不误伤（链接以 ) 结尾，不命中判据）", () => {
+    const html = renderMarkdown("[站点](https://example.com) 首页")
+    expect(html).toContain('<a href="https://example.com"')
+    expect(html).not.toContain("<pre>")
+  })
+
+  test("散文夹 JSON 围栏不受影响（不以 { 开头则原样渲染）", () => {
+    const html = renderMarkdown('分析如下：\n\n```json\n{"a": 1}\n```\n\n完毕。')
+    expect(html).toContain("<p>分析如下：</p>")
+    expect(html.match(/<pre>/g)?.length).toBe(1)
+  })
+
+  test("已是围栏的输入不二次围栏（` 开头不命中判据）", () => {
+    const html = renderMarkdown('```json\n{"a": 1}\n```')
+    expect(html.match(/<pre>/g)?.length).toBe(1)
+  })
+
+  test("autoFenceJson 纯函数：非 JSON 原样返回、JSON 包围栏、空白输入安全", () => {
+    expect(autoFenceJson("普通文本")).toBe("普通文本")
+    expect(autoFenceJson('{"a":1}')).toBe('```json\n{"a":1}\n```')
+    expect(autoFenceJson('  [1,2]  ')).toBe("```json\n[1,2]\n```")
+    expect(autoFenceJson("[文本](https://x)")).toBe("[文本](https://x)")
+    expect(autoFenceJson("")).toBe("")
+    expect(autoFenceJson(undefined as unknown as string)).toBe("")
+  })
+
+  test("恰好以 { 开头的非 JSON 文本被围栏（记录在案的取舍）", () => {
+    const html = renderMarkdown("{{template}}")
+    expect(html).toContain('<code class="language-json">')
   })
 })
 
