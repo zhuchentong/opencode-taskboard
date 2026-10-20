@@ -4,8 +4,6 @@ import { createServer, type ServerHandle } from "./server"
 import { registerTools } from "./tools"
 import { registerCommands } from "./commands"
 import { clientStore } from "./client"
-import { createContextReader } from "./context"
-import { createLiveHub, type LiveEvent, type LiveFrame } from "./live"
 import { initDispatcher, DISPATCH_CAPS } from "./dispatcher"
 import { createTerminalBridge, type TerminalBridge } from "./terminal"
 import type { Task } from "./types"
@@ -210,8 +208,6 @@ export async function arbitrate(opts: {
   log: (m: string) => void
   logs: () => readonly string[]
   hooks: { onWrite?: (tasks: Task[]) => void }
-  /** 实时上下文流：注册观看者并返回 detach（主/次实例同样接线——事件总线是 daemon 全局的） */
-  subscribeLive?: (sessionID: string, send: (frame: LiveFrame) => void, close?: () => void) => () => void
   /**
    * 终端桥（WebSocket 通道）。
    * 仅**主实例**注入：次要实例的终端路由直接 404（终端是本机单写者语义，
@@ -219,9 +215,6 @@ export async function arbitrate(opts: {
    */
   terminal?: TerminalBridge
 }): Promise<{ handle: ServerHandle; store: Store; primary: boolean; primaryPort: number }> {
-  /** 会话上下文读取器：只读打开 opencode 会话库，惰性连接（构造零 IO），主/次实例共用同一实例 */
-  const contextReader = createContextReader()
-
   const tryBind = (p: number, store: Store, primary: boolean): ServerHandle | undefined => {
     try {
       return createServer(store, {
@@ -232,8 +225,6 @@ export async function arbitrate(opts: {
         projectID: opts.projectID,
         logs: opts.logs,
         listModels,
-        readContext: (input) => contextReader.read(input),
-        subscribeLive: opts.subscribeLive,
         onWrite: (tasks) => opts.hooks.onWrite?.(tasks),
         // 终端桥只装主实例（次要实例终端路由 404）
         terminal: primary ? opts.terminal : undefined,
@@ -318,19 +309,6 @@ export default Plugin.define({
 
     const hooks: { onWrite?: (tasks: Task[]) => void } = {}
 
-    // 实时上下文流枢纽：把 opencode 事件总线接到看板的 live SSE 路由。
-    // 订阅是懒的（createLiveHub 内部保证）——只有首个观看者 attach 时才真正订阅总线。
-    // 类型断言：总线事件是大联合类型 V2Event，这里只取与 LiveEvent 结构兼容的子集
-    // （type + data）；断言写明意图，不写成 any/never 之类掩盖真实不兼容的形态。
-    const liveHub = createLiveHub({
-      subscribe: () => ctx.event.subscribe() as unknown as AsyncIterable<LiveEvent>,
-      log,
-      // 宿主定时器要求 this 为 globalThis：作为 deps 对象属性被调用时接收者会变成
-      // deps，会抛 Illegal invocation——必须显式绑定（同 webapp/src/lib/events.ts）
-      setInterval: setInterval.bind(globalThis),
-      clearInterval: clearInterval.bind(globalThis),
-    })
-
     // 装配期任一步失败（端口仲裁、派发器初始化、工具/命令注册），setup 直接抛错、
     // cleanup 永不执行——统一在此收口：拆掉 hub 的合帧定时器再原样上抛，
     // 免得留下一个每 150ms 空转的孤儿 interval（同 safeRegister 防僵尸端口）。
@@ -371,9 +349,6 @@ export default Plugin.define({
         log,
         logs: () => logs,
         hooks,
-        // 主/次实例同样接线：事件总线是 daemon 全局的，本实例的观看者由本实例的 hub 服务。
-        // close 透传给 hub：订阅死亡/建立失败时 hub 调它关流（前端唯一终态信号是连接关闭）
-        subscribeLive: (sessionID, send, close) => liveHub.attach(sessionID, send, close),
         // 终端桥：只注入主实例（次要实例终端路由 404）
         terminal,
       })
@@ -442,13 +417,11 @@ export default Plugin.define({
           }),
       ])
     } catch (e) {
-      liveHub.dispose()
       throw e
     }
 
     return async () => {
       dispatcher?.dispose()
-      liveHub.dispose()
       // 终端桥：只关自身连接与子进程，**不动 tmux 会话**（跨重启持久是设计目标）
       await terminal.close()
       arb.handle.stop()

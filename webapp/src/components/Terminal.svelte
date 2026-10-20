@@ -36,7 +36,7 @@
   let host = $state<HTMLDivElement | null>(null)
 
   // —— 以下都是「非响应式」资源句柄：普通变量，不进响应式依赖 ——
-  // （参照 ContextView 的 liveKey 模式：看板快照频繁重渲染不得重建连接）
+  // （看板快照频繁重渲染不得重建连接：连接句柄全部留在组件作用域之外的生命周期里）
   /** xterm 实例 */
   let term: Terminal | null = null
   /** 尺寸自适应插件 */

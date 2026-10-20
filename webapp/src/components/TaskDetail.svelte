@@ -14,7 +14,6 @@
   import { badgeHue, normalizeProjectId } from "$lib/project-options"
   import type { Project, Task, TaskUsage } from "$lib/types"
   import Markdown from "./Markdown.svelte"
-  import ContextView from "./ContextView.svelte"
   import Terminal from "./Terminal.svelte"
 
   let {
@@ -162,7 +161,6 @@
       <div class="flex flex-wrap items-center justify-between gap-2">
         <Tabs.List>
           <Tabs.Trigger value="content">内容</Tabs.Trigger>
-          <Tabs.Trigger value="context">上下文</Tabs.Trigger>
           <Tabs.Trigger value="stats">统计</Tabs.Trigger>
           <Tabs.Trigger value="comments">评论</Tabs.Trigger>
           <!-- 仅当任务已有会话才显示：不留一个点开就报错的空页签 -->
@@ -228,10 +226,6 @@
               <div class="grid grid-cols-[auto_1fr] items-start gap-x-1 text-muted-foreground"><span aria-hidden="true">✅</span><div class="prose prose-sm dark:prose-invert max-w-none wrap-anywhere"><Markdown source={task.result} /></div></div>
             </div>
           {/if}
-        </Tabs.Content>
-
-        <Tabs.Content value="context" class="grid gap-2.5">
-          <ContextView {task} />
         </Tabs.Content>
 
         <Tabs.Content value="stats" class="grid gap-2.5">
