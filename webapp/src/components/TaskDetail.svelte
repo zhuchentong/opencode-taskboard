@@ -12,9 +12,12 @@
   import { confirmDialog } from "$lib/notify"
   import { formatTokens, totalTokens } from "$lib/usage"
   import { badgeHue, normalizeProjectId } from "$lib/project-options"
+  import { loadTerminalConfig, saveTerminalConfig, terminalAvailable, type TerminalConfig } from "$lib/terminal"
   import type { Project, Task, TaskUsage } from "$lib/types"
   import Markdown from "./Markdown.svelte"
   import ContextView from "./ContextView.svelte"
+  import Terminal from "./Terminal.svelte"
+  import TerminalSettings from "./TerminalSettings.svelte"
 
   let {
     task,
@@ -45,6 +48,23 @@
   let rejectInput = $state<HTMLTextAreaElement | null>(null)
   let panel = $state<HTMLElement | null>(null)
   let editing = $state(false) // 任一编辑器持有焦点时，快照不顶掉输入
+  /** 当前激活的页签：绑出 bits-ui 的 value，才能知道「终端」页签是否在视野内（切出即断开 WS） */
+  let tab = $state("content")
+  /** 终端（web 终端打开 opencode session）配置：存 localStorage，与既有偏好同款容错读写 */
+  let terminalConfig = $state<TerminalConfig>(loadTerminalConfig())
+  /** 「终端设置」面板是否展开 */
+  let terminalSettingsOpen = $state(false)
+  /** worker 会话 ID：没有会话就没有终端可开 */
+  const terminalSessionID = $derived(task.claim?.sessionID ?? "")
+  /** 「终端」页签是否可用：已领取有会话 + 已配置 sidecar */
+  const terminalUsable = $derived(terminalAvailable(terminalConfig, terminalSessionID))
+
+  /** 保存终端配置：落 localStorage + 刷新响应式配置（触发终端连接按新配置重建） */
+  function saveTerminal(cfg: TerminalConfig) {
+    saveTerminalConfig(cfg)
+    terminalConfig = { sidecarUrl: cfg.sidecarUrl, token: cfg.token }
+    terminalSettingsOpen = false
+  }
 
   // 外部快照更新时同步本地编辑态；用户正在编辑则让路，失焦后由 onchange 提交或还原
   $effect(() => {
@@ -52,6 +72,11 @@
       title = task.title
       description = task.description
     }
+  })
+
+  // 终端页签消失（配置被清空 / 任务被收回）时把焦点页签拨回「内容」，避免停在空页签
+  $effect(() => {
+    if (tab === "terminal" && !terminalUsable) tab = "content"
   })
 
   $effect(() => {
@@ -146,15 +171,38 @@
       <Dialog.Description class="sr-only">{task.description || "任务详情"}</Dialog.Description>
     </Dialog.Header>
 
-    <Tabs.Root value="content" class="flex min-h-0 flex-1 flex-col gap-2.5">
-      <Tabs.List>
-        <Tabs.Trigger value="content">内容</Tabs.Trigger>
-        <Tabs.Trigger value="context">上下文</Tabs.Trigger>
-        <Tabs.Trigger value="stats">统计</Tabs.Trigger>
-        <Tabs.Trigger value="comments">评论</Tabs.Trigger>
-      </Tabs.List>
+    <Tabs.Root bind:value={tab} class="flex min-h-0 flex-1 flex-col gap-2.5">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <Tabs.List>
+          <Tabs.Trigger value="content">内容</Tabs.Trigger>
+          <Tabs.Trigger value="context">上下文</Tabs.Trigger>
+          <Tabs.Trigger value="stats">统计</Tabs.Trigger>
+          <Tabs.Trigger value="comments">评论</Tabs.Trigger>
+          <!-- 仅当任务已有会话且已配置 sidecar 才显示：不留一个点开就报错的空页签 -->
+          {#if terminalUsable}
+            <Tabs.Trigger value="terminal">终端</Tabs.Trigger>
+          {/if}
+        </Tabs.List>
+        <Button
+          variant="ghost"
+          size="sm"
+          onclick={() => (terminalSettingsOpen = !terminalSettingsOpen)}
+          title="配置 sidecar 地址与共享口令"
+        >
+          {terminalSettingsOpen ? "收起终端设置" : "终端设置"}
+        </Button>
+      </div>
       <!-- 焦点锚 + 唯一滚动区：页头/页签/页脚固定，仅本容器内部滚动 -->
       <div class="min-h-0 flex-1 overflow-y-auto outline-none" bind:this={panel} tabindex="-1">
+        {#if terminalSettingsOpen}
+          <div class="mb-2.5">
+            <TerminalSettings
+              config={terminalConfig}
+              onsave={saveTerminal}
+              oncancel={() => (terminalSettingsOpen = false)}
+            />
+          </div>
+        {/if}
         <Tabs.Content value="content" class="grid gap-4">
           <label class="grid gap-1 text-[13px]">
             <span class="text-xs text-muted-foreground">标题</span>
@@ -319,6 +367,21 @@
             </section>
           {/if}
         </Tabs.Content>
+
+        <!-- 终端：仅在任务已有会话且已配置 sidecar 时才挂载（页签本身也是条件显示） -->
+        {#if terminalUsable}
+          <Tabs.Content value="terminal" class="grid gap-2.5">
+            <Terminal
+              taskId={task.id}
+              sessionID={terminalSessionID}
+              config={terminalConfig}
+              active={tab === "terminal"}
+            />
+            <div class="flex justify-end">
+              <Button variant="ghost" size="sm" onclick={() => (terminalSettingsOpen = true)}>终端设置</Button>
+            </div>
+          </Tabs.Content>
+        {/if}
 
         <Tabs.Content value="comments" class="grid gap-2">
           <h3 class="text-[13px] font-medium">评论（{task.comments.length}）</h3>
