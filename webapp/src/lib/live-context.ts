@@ -117,6 +117,58 @@ function applyMessageEnd(messages: ContextMessage[], messageID: string | null): 
   return next
 }
 
+/**
+ * 任务可连实时的会话 ID；拿不到就返回空串（调用方据此不开 EventSource）。
+ *
+ * 硬规则（规格 §6「任务无会话 → 前端不重试」）：无会话的任务（未领取 / 人工执行）
+ * 根本不开 EventSource——服务端那条路由会「一帧 message-end 即关流」，
+ * 客户端若去连就会陷入「关流 → 退避重连 → 再关流」的重试风暴。
+ * 前端从任务快照已知会话 ID（task.claim.sessionID），为空即零请求。
+ */
+export function liveSessionID(task: { claim?: { sessionID?: string } }): string {
+  const id = task.claim?.sessionID
+  return typeof id === "string" ? id : ""
+}
+
+/**
+ * 收敛快照与实时消息（审查重点 3）：按消息 id 整组替换，不重复不丢失。
+ *
+ * 两侧的数据形态：
+ * - 快照是服务端分页读出的完整消息（时间倒序，最新在前）；
+ * - 实时是状态机自持的增量累积结果（同为倒序），只含本条实时流见过的消息。
+ *
+ * 合并规则（快照在前，实时在后）：
+ * - 快照里没有的 live 消息 → 按 live 顺序（最新在前）前置到结果头部；
+ * - 快照里有的 live 消息 → 按 id 原位替换（live 版优先：实时是更新的权威内容）；
+ * - 只存在于快照的消息 → 保留在后面（更早的消息不能丢）；
+ * - live 为空 → 原样返回快照。
+ *
+ * 纯函数：不改入参、返回新数组；重复合并幂等（无副作用），
+ * 因此「重拉快照」与「收到新帧」两条路径都能安全地反复调用。
+ */
+export function mergeLive(snapshot: ContextMessage[], live: ContextMessage[]): ContextMessage[] {
+  if (live.length === 0) return snapshot
+  // 同 id 的 live 消息只认首个（状态机内部不会产生重复，这里只是防御）
+  const liveById = new Map<string, ContextMessage>()
+  for (const m of live) {
+    if (!liveById.has(m.id)) liveById.set(m.id, m)
+  }
+  const snapshotIDs = new Set<string>()
+  for (const m of snapshot) snapshotIDs.add(m.id)
+  const out: ContextMessage[] = []
+  // live 独有（快照里没有）的消息：按 live 顺序前置到头部
+  for (const m of live) {
+    if (snapshotIDs.has(m.id)) continue
+    if (liveById.get(m.id) !== m) continue // 同 id 重复项只取首个
+    out.push(m)
+  }
+  // 快照消息原位保留：live 有的按 id 替换（live 是更新的权威内容），没有的原样留下
+  for (const m of snapshot) {
+    out.push(liveById.get(m.id) ?? m)
+  }
+  return out
+}
+
 // —— 订阅状态机（connectLiveContext）——
 
 /** 实时订阅的连接态：live=实时中；reconnecting=断线退避重连中；off=连续三败降级（终态） */

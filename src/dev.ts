@@ -3,6 +3,7 @@
 import { createStore, memoryBackend } from "./store"
 import { createServer } from "./server"
 import type { ContextPage, ContextReadInput } from "./context"
+import { createFakeLive } from "./dev-live"
 
 const store = createStore(memoryBackend(), { requireAnalysisConfirm: false, directory: process.cwd() })
 
@@ -65,6 +66,10 @@ const handle = createServer(store, {
   primary: true,
   logs: () => ["dev 模式运行中"],
   readContext: fakeContext,
+  // dev 假事件源：模拟 worker 的实时输出（打字机文本 → 工具状态翻转 → 回合收尾），
+  // 让前端在没有 OpenCode 的情况下也能看到实时流效果；帧字段与服务端协议逐字一致。
+  // sessionID 忽略：dev 模式只有一个被领取的任务（ses_dev_mock），对任意会话发即可。
+  subscribeLive: (_sessionID, send) => createFakeLive(send),
 })
 
 console.log(`[taskboard] dev 看板已启动：http://127.0.0.1:${handle.actualPort}/ （token=dev，Ctrl+C 退出）`)

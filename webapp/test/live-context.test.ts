@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { applyFrame, connectLiveContext, liveBackoffDelay, type LiveFrame } from "../src/lib/live-context"
+import { applyFrame, connectLiveContext, liveBackoffDelay, liveSessionID, mergeLive, type LiveFrame } from "../src/lib/live-context"
 import type { ContextMessage } from "../src/lib/context"
 
 const M = (id: string, parts: ContextMessage["parts"]): ContextMessage => ({ id, role: "assistant", time: 1, parts })
@@ -78,6 +78,64 @@ test("applyFrame 返回新数组不改入参（Svelte $state 兼容）", () => {
   expect(input[0]!.streaming).toBeUndefined()
   applyFrame(input, { type: "message-end", messageID: null })
   expect(input[0]!.streaming).toBeUndefined() // 定格也不写回入参
+})
+
+// —— mergeLive 收敛快照与实时 ——
+
+test("liveSessionID：无会话（未领取/人工执行）→ 空串；有会话 → 会话 ID", () => {
+  expect(liveSessionID({})).toBe("") // 未领取
+  expect(liveSessionID({ claim: { sessionID: "" } })).toBe("") // 空会话 ID 也不连
+  expect(liveSessionID({ claim: { sessionID: "ses_x" } })).toBe("ses_x")
+  expect(liveSessionID({ claim: {} as { sessionID?: string } })).toBe("") // 字段缺失兜底
+})
+
+test("mergeLive 以 live 消息按 id 替换/前置，保留仅存在于快照的更早消息", () => {
+  // 快照：m1（最新）、m2（更早）
+  const snapshot = [M("m1", [{ type: "text", text: "快照版" }]), M("m2", [{ type: "text", text: "更早的消息" }])]
+  // live 含快照首页 m1 → 原位替换（live 是更新的权威内容），m2 保留在后面
+  const liveSame = [{ ...M("m1", [{ type: "text", text: "实时版" }]), streaming: true }]
+  const merged = mergeLive(snapshot, liveSame)
+  expect(merged.map((m) => m.id)).toEqual(["m1", "m2"])
+  expect(merged[0]!.parts).toEqual([{ type: "text", text: "实时版" }])
+  expect(merged[0]!.streaming).toBe(true)
+  expect(merged[1]!.parts).toEqual([{ type: "text", text: "更早的消息" }])
+  // live 只含新消息 → 前置到头部，旧消息保持在后
+  const liveNew = [M("m3", [{ type: "text", text: "新消息" }])]
+  const merged2 = mergeLive(snapshot, liveNew)
+  expect(merged2.map((m) => m.id)).toEqual(["m3", "m1", "m2"])
+  expect(merged2[1]!.parts).toEqual([{ type: "text", text: "快照版" }]) // 快照版未被污染
+})
+
+test("mergeLive 空 live → 原样返回快照（不新建数组）", () => {
+  const snapshot = [M("m1", [])]
+  expect(mergeLive(snapshot, [])).toBe(snapshot)
+})
+
+test("mergeLive 不改入参、返回新数组（纯函数）", () => {
+  const snapshot = [M("m1", [{ type: "text", text: "快照" }])]
+  const live = [M("m1", [{ type: "text", text: "实时" }]), M("m2", [])]
+  const before = JSON.stringify({ snapshot, live })
+  const out = mergeLive(snapshot, live)
+  expect(out).not.toBe(snapshot)
+  expect(out).not.toBe(live)
+  expect(JSON.stringify({ snapshot, live })).toBe(before) // 两个入参都没被改写
+})
+
+test("mergeLive 幂等：重复合并结果一致（可安全地反复调用）", () => {
+  const snapshot = [M("m1", [{ type: "text", text: "快照" }]), M("m2", [])]
+  const live = [M("m1", [{ type: "text", text: "实时" }]), M("m3", [])]
+  const once = mergeLive(snapshot, live)
+  const twice = mergeLive(once, live)
+  expect(twice.map((m) => m.id)).toEqual(once.map((m) => m.id))
+  expect(twice).toEqual(once)
+})
+
+test("mergeLive 同 id 的 live 重复项只取首个（防御状态机外的脏输入）", () => {
+  const snapshot = [M("m1", [])]
+  const live = [M("m9", [{ type: "text", text: "首个" }]), M("m9", [{ type: "text", text: "第二个" }])]
+  const out = mergeLive(snapshot, live)
+  expect(out.map((m) => m.id)).toEqual(["m9", "m1"])
+  expect(out[0]!.parts).toEqual([{ type: "text", text: "首个" }])
 })
 
 // —— connectLiveContext 订阅状态机 ——
