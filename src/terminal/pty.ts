@@ -3,13 +3,21 @@
 // 为什么不用 node-pty：实测在 Bun 1.4.2 下 node-pty 虽然能加载，但 spawn 后
 // resize 报 ioctl EBADF、输出恒为 0 字节（不可用）。
 //
-// 为什么用 `script -qfc`：`script` 会给子命令分配一个真 PTY 并把它的输入输出接过来，
+// 为什么用 `script -qefc`：`script` 会给子命令分配一个真 PTY 并把它的输入输出接过来，
 // 于是 tmux attach-session 认为自己挂在一个终端上（TUI 渲染才正常）。
 // 尺寸靠命令前缀 `stty rows H cols W` 在 attach 之前定好；
 // 运行期改尺寸走 `tmux list-clients` → `stty -F <tty>`（内核 SIGWINCH → tmux 自适应）。
 //
+// ⚠️ 平台限定（Linux only）：`script -c/-e` 是 util-linux 专有选项，
+// macOS/BSD 的 script 没有 `-c`（也不支持 `-e` 透传退出码）——本实现**仅 Linux 可用**。
+// 非 Linux 环境由 `ScriptProbe` 探测出来并给中文提示（终端功能不可用），不会崩服务。
+//
 // ⚠️ `script -c` 内部走 shell：命令参数必须是白名单安全的。
 // 这里用 assertShellSafe 兜住（会话名只允许 [A-Za-z0-9_-]）。
+
+import { isValidSize } from "./protocol"
+import { DEFAULT_COLS, DEFAULT_ROWS } from "./tmux"
+import type { RunCmd } from "./tmux"
 
 /** pty 启动选项 */
 export interface PtyOptions {
@@ -38,6 +46,18 @@ export interface PtyLike {
 /** pty 启动器（注入点） */
 export type SpawnPty = (cmd: string[], opts: PtyOptions) => PtyLike | Promise<PtyLike>
 
+/** script 探测失败的缓存时长：装上 util-linux 后无需重启看板服务 */
+export const SCRIPT_PROBE_FAILURE_TTL_MS = 30_000
+
+/**
+ * script 的启动参数（util-linux）：
+ * - `-q` 静默（不回显 "Script started/done"）
+ * - `-e` **透传子进程退出码**（TUI 退出码要传给浏览器；缺它则恒为 0）
+ * - `-f` 每次调用都刷新（不依赖 ~/.scriptrc）
+ * - `-c` 执行后面的命令串
+ */
+export const SCRIPT_ARGS = ["-qefc"] as const
+
 /** shell 安全字符白名单（参数数组里每个元素都要过这一关） */
 const SHELL_SAFE = /^[A-Za-z0-9_\-./:=@,+]*$/
 
@@ -51,16 +71,55 @@ export function assertShellSafe(args: string[]): void {
 }
 
 /**
+ * 归一化 pty 初始尺寸：非法值回退默认尺寸。
+ * 为什么要校验：cols/rows 会被插值进 `stty rows H cols W` 命令串，
+ * NaN/负数/小数拼进去会让 stty 报错（PTY 起不来，表现为终端一片空白）。
+ */
+export function resolvePtySize(cols: unknown, rows: unknown): { cols: number; rows: number } {
+  if (isValidSize(cols, rows)) return { cols: cols as number, rows: rows as number }
+  return { cols: DEFAULT_COLS, rows: DEFAULT_ROWS }
+}
+
+/**
+ * `script`（util-linux）可用性探测。
+ * 成功结果永久缓存；失败只缓存 SCRIPT_PROBE_FAILURE_TTL_MS——
+ * 这样「先开看板、后装 util-linux」不用重启服务。
+ */
+export class ScriptProbe {
+  private runCmd: RunCmd
+  private cache?: { value: boolean; at: number }
+
+  constructor(runCmd: RunCmd) {
+    this.runCmd = runCmd
+  }
+
+  async available(): Promise<boolean> {
+    if (this.cache?.value === true) return true
+    const now = Date.now()
+    if (this.cache && now - this.cache.at < SCRIPT_PROBE_FAILURE_TTL_MS) {
+      return this.cache.value
+    }
+    const result = await this.runCmd("script", ["--version"])
+    const value = result.code === 0
+    this.cache = { value, at: now }
+    return value
+  }
+}
+
+/**
  * 默认 pty 启动器（生产路径）。
  * @param cmd 命令与参数（不经 shell；内部会拼进 `script -c` 的命令串，故需白名单）
  */
 export function defaultSpawnPty(cmd: string[], opts: PtyOptions): PtyLike {
   assertShellSafe(cmd)
-  const inner = `stty rows ${opts.rows} cols ${opts.cols}; ${cmd.join(" ")}`
-  const proc = Bun.spawn(["script", "-qfc", inner, "/dev/null"], {
+  const { cols, rows } = resolvePtySize(opts.cols, opts.rows)
+  const inner = `stty rows ${rows} cols ${cols}; ${cmd.join(" ")}`
+  // `-e` 让 script 透传子进程退出码（否则 TUI 退出时浏览器只能收到 code=0）
+  const proc = Bun.spawn(["script", ...SCRIPT_ARGS, inner, "/dev/null"], {
     stdin: "pipe",
     stdout: "pipe",
-    stderr: "pipe",
+    // stderr 走 ignore：script 的 stderr 若用 pipe 却不排空，64KB 写满后会**阻塞** script
+    stderr: "ignore",
     ...(opts.cwd ? { cwd: opts.cwd } : {}),
     ...(opts.env ? { env: { ...process.env, ...opts.env } } : {}),
   })
@@ -90,7 +149,7 @@ export function defaultSpawnPty(cmd: string[], opts: PtyOptions): PtyLike {
     }
   })()
 
-  // 进程退出：script 退出码 = 内层命令退出码
+  // 进程退出：靠 `script -e` 透传内层命令退出码（TUI 退出码要传给浏览器）
   void (async () => {
     const code = await proc.exited
     for (const cb of exitCbs) {

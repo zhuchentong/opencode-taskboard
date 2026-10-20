@@ -7,6 +7,10 @@ function setup(overrides: {
   checkSession?: (sessionID: string) => Promise<{ ok: boolean; directory?: string; message?: string }>
   runResponses?: Parameters<typeof createFakeRunCmd>[0]
   idleTimeoutMs?: number
+  /** pty 启动器覆写（默认返回假 pty） */
+  spawnPty?: () => Promise<unknown>
+  /** 脱敏名单（看板 token 等） */
+  redact?: string[]
   check?: () => void
 } = {}) {
   const clock = createFakeClock()
@@ -16,16 +20,18 @@ function setup(overrides: {
   const bridge = createTerminalBridge({
     clock,
     runCmd: run,
-    spawnPty: async () => {
+    spawnPty: (async () => {
       spawnCount += 1
+      if (overrides.spawnPty) return overrides.spawnPty()
       return pty
-    },
+    }) as never,
     checkSession:
       overrides.checkSession ?? (async () => ({ ok: true, directory: "/tmp/work" })),
     discoverDaemon: async () => ({ url: "http://127.0.0.1:49898", password: "pw-12345678" }),
     existsSync: () => true,
     homeDir: () => "/home/u",
     idleTimeoutMs: overrides.idleTimeoutMs ?? 30 * 60 * 1000,
+    ...(overrides.redact ? { redact: overrides.redact } : {}),
     logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
   })
   overrides.check?.()
@@ -289,6 +295,113 @@ describe("终端桥接核心", () => {
     expect(run.findCalls("new-session").length).toBe(1)
     expect(run.findCalls("kill-session")[0]?.args).toEqual(["kill-session", "-t", "board-ses_1"])
     expect(pty.dataCbs.length).toBe(0) // 没起 attach 客户端
+  })
+
+  test("非法 sessionID（白名单闸）→ 中文 error 帧，绝不建 tmux 会话、绝不 spawn pty", async () => {
+    const { bridge, run, pty, spawnCount } = setup()
+    const ws = createFakeSocket()
+
+    await bridge.handle(ws as unknown as TerminalSocket, "ses; touch /tmp/PWNED")
+
+    expect(ws.controls().length).toBe(1)
+    expect(ws.controls()[0].type).toBe("error")
+    expect(String(ws.controls()[0].message)).toContain("会话 ID 非法")
+    expect(ws.closed.length).toBe(1)
+    // 一律不碰 tmux：不查会话、不建会话、不起 pty
+    expect(run.findCalls("has-session").length).toBe(0)
+    expect(run.findCalls("new-session").length).toBe(0)
+    expect(spawnCount()).toBe(0)
+    expect(pty.dataCbs.length).toBe(0)
+  })
+
+  test("非法 sessionID 的回显去掉控制字符并截断（不污染日志/前端）", async () => {
+    const { bridge } = setup()
+    const ws = createFakeSocket()
+
+    await bridge.handle(ws as unknown as TerminalSocket, "ses\n注入\r日志")
+
+    const message = String(ws.controls()[0].message)
+    expect(message).not.toContain("\n")
+    expect(message).not.toContain("\r")
+  })
+
+  test("script 不可用 → 中文 error 帧，绝不建 tmux 会话", async () => {
+    const { bridge, run, spawnCount } = setup({
+      runResponses: { "--version": { code: 1, stdout: "", stderr: "not found" } },
+    })
+    const ws = createFakeSocket()
+
+    await bridge.handle(ws as unknown as TerminalSocket, "ses_1")
+
+    expect(ws.controls()[0].type).toBe("error")
+    expect(String(ws.controls()[0].message)).toContain("script")
+    expect(ws.closed.length).toBe(1)
+    expect(run.findCalls("new-session").length).toBe(0)
+    expect(spawnCount()).toBe(0)
+  })
+
+  test("pty 启动失败 → 回收刚建出的 tmux 会话（不留空跑的 TUI）", async () => {
+    const { bridge, run, spawnCount } = setup({
+      runResponses: { "has-session": { code: 1, stdout: "", stderr: "" } },
+      spawnPty: async () => {
+        throw new Error("spawn ENOENT: script")
+      },
+    })
+    const ws = createFakeSocket()
+
+    await bridge.handle(ws as unknown as TerminalSocket, "ses_1")
+
+    expect(run.findCalls("new-session").length).toBe(1)
+    expect(run.findCalls("kill-session")[0]?.args).toEqual(["kill-session", "-t", "board-ses_1"])
+    expect(ws.controls()[0].type).toBe("error")
+    expect(String(ws.controls()[0].message)).toContain("启动 tmux 客户端失败")
+    expect(ws.closed.length).toBe(1)
+    expect(spawnCount()).toBe(1)
+  })
+
+  test("pty 启动失败但会话是原有的 → 不回收（不能动别人挂着的 TUI）", async () => {
+    const { bridge, run } = setup({
+      spawnPty: async () => {
+        throw new Error("spawn ENOENT: script")
+      },
+    })
+    const ws = createFakeSocket()
+
+    await bridge.handle(ws as unknown as TerminalSocket, "ses_1")
+
+    expect(run.findCalls("new-session").length).toBe(0)
+    expect(run.findCalls("kill-session").length).toBe(0)
+    expect(ws.controls()[0].type).toBe("error")
+  })
+
+  test("看板 token 进脱敏名单 → 日志里不出现明文（只出现 ***）", async () => {
+    const lines: string[] = []
+    const clock = createFakeClock()
+    const run = createFakeRunCmd()
+    const bridge = createTerminalBridge({
+      clock,
+      runCmd: run,
+      spawnPty: async () => createFakePty(),
+      // 上游错误文案里带了 token（真实场景：凭据类报错可能回显凭据）
+      checkSession: async () => ({ ok: false, message: "会话校验失败：凭据 tok-abcdef123456 无效" }),
+      discoverDaemon: async () => ({ url: "http://127.0.0.1:49898", password: "pw-12345678" }),
+      existsSync: () => true,
+      homeDir: () => "/home/u",
+      redact: ["tok-abcdef123456"],
+      logger: {
+        info: (m: string) => lines.push(m),
+        warn: (m: string) => lines.push(m),
+        error: (m: string) => lines.push(m),
+        debug: (m: string) => lines.push(m),
+      },
+    })
+    const ws = createFakeSocket()
+
+    await bridge.handle(ws as unknown as TerminalSocket, "ses_1")
+
+    const text = lines.join("\n")
+    expect(text).not.toContain("tok-abcdef123456")
+    expect(text).toContain("***")
   })
 
   test("close()：关自身连接与子进程，但不动 tmux 会话", async () => {

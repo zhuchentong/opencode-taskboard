@@ -17,11 +17,19 @@ import { homedir } from "node:os"
 import { IdleReaper, systemClock } from "./idle"
 import type { Clock } from "./idle"
 import { CONTROL, encodeControl, isValidSize, parseControl } from "./protocol"
-import { defaultSpawnPty } from "./pty"
+import { ScriptProbe, defaultSpawnPty } from "./pty"
 import type { PtyLike, SpawnPty } from "./pty"
 import { discoverDaemon } from "./service"
 import type { DaemonInfo } from "./service"
-import { DEFAULT_COLS, DEFAULT_ROWS, TMUX_TERM, TmuxManager, defaultRunCmd, sessionName } from "./tmux"
+import {
+  DEFAULT_COLS,
+  DEFAULT_ROWS,
+  TMUX_TERM,
+  TmuxManager,
+  defaultRunCmd,
+  isValidSessionID,
+  sessionName,
+} from "./tmux"
 import type { RunCmd } from "./tmux"
 
 /** 应用层心跳间隔：WS idleTimeout 120s，25s 一跳保活（浏览器收到 ping 帧直接忽略） */
@@ -79,6 +87,11 @@ export interface TerminalBridgeDeps {
   homeDir?: () => string
   /** 服务注册文件路径（注入便于测试） */
   serviceFilePath?: string
+  /**
+   * 需要脱敏的机密值（如看板 token）：日志里绝不能出现明文。
+   * 纵深防御——当前代码路径本就不会打印 token，但别依赖「调用方自觉」。
+   */
+  redact?: string[]
 }
 
 /** 终端桥句柄 */
@@ -124,8 +137,11 @@ export function createTerminalBridge(deps: TerminalBridgeDeps): TerminalBridge {
   const serviceFilePath = deps.serviceFilePath
   const discover = deps.discoverDaemon ?? (() => discoverDaemon({ serviceFilePath }))
 
-  /** 机密值脱敏名单（daemon 密码等）：日志里绝不能出现明文 */
+  /** 机密值脱敏名单（daemon 密码、看板 token 等）：日志里绝不能出现明文 */
   const secrets = new Set<string>()
+  for (const s of deps.redact ?? []) {
+    if (typeof s === "string" && s.length > 0) secrets.add(s)
+  }
   function scrub(text: string): string {
     let out = String(text)
     for (const secret of secrets) {
@@ -142,6 +158,7 @@ export function createTerminalBridge(deps: TerminalBridgeDeps): TerminalBridge {
   }
 
   const tmux = new TmuxManager({ runCmd, logger: log })
+  const script = new ScriptProbe(runCmd)
   const idle = new IdleReaper({
     timeoutMs: deps.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS,
     clock,
@@ -172,9 +189,14 @@ export function createTerminalBridge(deps: TerminalBridgeDeps): TerminalBridge {
     }
   }
 
+  /** 回显用的安全文本：去掉控制字符并截断（会话 ID 非法时不能把控制字符写进日志/前端） */
+  function safeEcho(text: string): string {
+    return String(text).replace(/[\u0000-\u001f\u007f]/g, "?").slice(0, 64)
+  }
+
   /** 报错并断开：发中文 error 帧后关连接 */
   function fail(state: ConnState, message: string): void {
-    log.warn(`终端连接失败（${state.sessionID}）：${message}`)
+    log.warn(`终端连接失败（${safeEcho(state.sessionID)}）：${message}`)
     sendControl(state.ws, { type: CONTROL.ERROR, message })
     closeSocket(state.ws, 1011, "terminal_failed")
   }
@@ -245,6 +267,12 @@ export function createTerminalBridge(deps: TerminalBridgeDeps): TerminalBridge {
 
   /** 准备连接：校验 → 服务发现 → tmux 会话 → attach 客户端 */
   async function setup(state: ConnState): Promise<void> {
+    // 0) sessionID 白名单：非法 ID 一律不碰 tmux（防会话名注入 / 越权建会话）
+    if (!isValidSessionID(state.sessionID)) {
+      fail(state, `会话 ID 非法：${safeEcho(state.sessionID)}`)
+      return
+    }
+
     // 1) 会话存在性校验：先于 exec（会话不存在绝不启动 TUI）
     const check = await deps.checkSession(state.sessionID)
     if (state.closed) return
@@ -265,7 +293,13 @@ export function createTerminalBridge(deps: TerminalBridgeDeps): TerminalBridge {
 
     // 3) tmux 可用性
     if (!(await tmux.available())) {
-      fail(state, "未检测到 tmux：请先安装 tmux（brew install tmux / apt install tmux）后重试")
+      fail(state, "未检测到 tmux 命令：终端功能需要 tmux（Linux 环境请先安装 tmux）")
+      return
+    }
+
+    // 3.5) script 可用性：PTY 靠 script 分配真终端（util-linux 专有，仅 Linux 可用）
+    if (!(await script.available())) {
+      fail(state, "未检测到 script 命令（util-linux）：终端功能需要 script 分配 PTY（Linux 环境请先安装 util-linux）")
       return
     }
 
@@ -306,6 +340,10 @@ export function createTerminalBridge(deps: TerminalBridgeDeps): TerminalBridge {
         cwd,
       })
     } catch (err) {
+      // 起 attach 客户端失败（没装 script / sessionID 触发白名单 / pty 分配失败）：
+      // 刚建出的 tmux 会话（含活 TUI）没人会回收——空闲回收器只统计 attach 过的客户端，
+      // 统计不到它 → 这里显式收掉，否则 TUI 会在 tmux 里空跑到天荒地老。
+      if (created) await tmux.killSession(name)
       fail(state, `启动 tmux 客户端失败：${(err as Error)?.message ?? "未知错误"}`)
       return
     }

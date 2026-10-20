@@ -358,6 +358,8 @@ export default Plugin.define({
         warn: (m: string) => log(`终端：${m}`),
         error: (m: string) => log(`终端：${m}`),
       },
+      // 纵深防御：看板 token 也不许出现在日志里
+      redact: [token],
     })
     try {
       arb = await arbitrate({

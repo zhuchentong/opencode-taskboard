@@ -121,7 +121,8 @@ terminal-sidecar（独立 Node 进程，tools/terminal-sidecar/）
    ├─ 服务发现：读 ~/.local/state/opencode/service.json（url + password）→ 失败 → error 帧，**绝不 exec**
    └─ tmux 承载：`board-<sessionID>` 会话里跑 opencode --server <url> --session <id>
         └─ 每个浏览器连接一个 attach 客户端：
-           script -qfc "stty rows H cols W; tmux attach-session -t board-<id>" /dev/null
+           script -qefc "stty rows H cols W; tmux attach-session -t board-<id>" /dev/null
+             （-e 透传 TUI 退出码；⚠️ script -c/-e 是 util-linux 专有 → 本实现仅 Linux 可用）
              └─ 动态 resize：tmux list-clients -t board-<id> -F '#{client_tty}'
                              → stty -F <tty> cols W rows H（内核 SIGWINCH → tmux 客户端自适应）
 ```
@@ -139,7 +140,7 @@ terminal-sidecar（独立 Node 进程，tools/terminal-sidecar/）
 |---|---|---|
 | 进程 | 用户手起的独立 Node 进程 | 看板主实例内（插件进程的一部分） |
 | 启动 | 用户手动 `node src/index.js --token …` | 零配置：开看板即有 |
-| PTY | node-pty（原生模块） | `script` 包装（node-pty 在 Bun 1.4.2 下不可用：resize 报 ioctl EBADF、输出恒 0 字节） |
+| PTY | node-pty（原生模块） | `script -qefc` 包装（node-pty 在 Bun 1.4.2 下不可用：resize 报 ioctl EBADF、输出恒 0 字节）；`-e` 透传 TUI 退出码。⚠️ util-linux 专有 → **仅 Linux 可用** |
 | 改尺寸 | `pty.resize(cols, rows)` | `tmux list-clients` → `stty -F <tty> cols W rows H` |
 | 存在性校验 | HTTP `GET <daemon>/api/session/<id>` + Basic 认证 | 插件内 `ctx.session.get`（同进程 SDK 调用：无网络往返、不处理 daemon 凭据） |
 | 会话 cwd | `location.directory`（HTTP 响应体） | `location.directory`（SDK 返回体，同源） |
@@ -166,8 +167,9 @@ terminal-sidecar（独立 Node 进程，tools/terminal-sidecar/）
 
 - 账本「方案 1 可行性验证」①~⑤：node-pty 不可用 → `script` 方案全通；Bun.serve WS 与 SSE 并发互不干扰；
   `ctx.client.session.get` SDK 直用可用；TUI 在 tmux 内正常渲染并与 daemon 建立连接，进程祖先链不含 daemon。
-- 任务 3 实施期复验（自动化）：根 `bun test` 682 pass（基线 631 + 新增 51，0 fail）；
-  真 tmux 冒烟（假 TUI = `cat`，绝不碰 opencode）：attach / 输入回显 / resize（tmux 窗口 100x39）/ 退出帧 四步全通。
+- 任务 3 实施期复验（自动化）：根 `bun test` **699 pass**（基线 631 + 新增 68，0 fail；
+  任务 3 交付时 688，复审修复轮 +11）；真 tmux 冒烟（假 TUI = `cat`，绝不碰 opencode）：
+  attach / 输入回显 / resize（tmux 窗口 100x39）/ 退出帧 四步全通。
 
 ### 任务划分（修订）
 

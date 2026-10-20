@@ -23,7 +23,17 @@ export {
 export { IdleReaper, systemClock } from "./idle"
 export type { Clock } from "./idle"
 export { CONTROL, encodeControl, isValidSize, parseControl, type ControlType, type ParsedControl } from "./protocol"
-export { assertShellSafe, defaultSpawnPty, type PtyLike, type PtyOptions, type SpawnPty } from "./pty"
+export {
+  assertShellSafe,
+  defaultSpawnPty,
+  resolvePtySize,
+  ScriptProbe,
+  SCRIPT_ARGS,
+  SCRIPT_PROBE_FAILURE_TTL_MS,
+  type PtyLike,
+  type PtyOptions,
+  type SpawnPty,
+} from "./pty"
 export {
   discoverDaemon,
   normalizeDaemonUrl,
