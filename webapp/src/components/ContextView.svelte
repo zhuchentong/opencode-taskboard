@@ -9,7 +9,16 @@
 
   let { task }: { task: Task } = $props()
 
-  let messages = $state<ContextMessage[]>([])
+  /** 快照侧：服务端分页读出的消息（最新在前）；load 覆盖它、loadMore 追加到尾部 */
+  let snapshotMessages = $state<ContextMessage[]>([])
+  /** 实时侧：订阅状态机累积的实时消息（最新在前）；订阅键变化时清空 */
+  let liveMessages = $state<ContextMessage[]>([])
+  /**
+   * 展示用消息列表 = 快照侧 + 实时侧收敛（派生值，不可直接赋值）。
+   * 两侧分开存是硬要求：混装在一个数组里时，翻页拿回的旧页会与实时侧累出的旧消息
+   * 撞出重复 id（keyed each 不支持重复 key → 整段列表崩）。
+   */
+  const messages = $derived(mergeLive(snapshotMessages, liveMessages))
   let total = $state(0)
   let cursor = $state<string | null>(null)
   let hasMore = $state(false)
@@ -18,8 +27,6 @@
   let error = $state("")
   /** 实时连接态：live=实时中；reconnecting=断线退避重连中；off=未开启/已降级（终态） */
   let liveStatus = $state<LiveStatus>("off")
-  /** 最近一次收到的实时消息（组件自持一份）：重拉快照时用它收敛，避免把实时内容冲掉 */
-  let liveMessages = $state<ContextMessage[]>([])
   /** 当前实时订阅的键（任务 ID + 会话 ID）：键不变就不重建订阅（普通变量，不进响应式依赖） */
   let liveKey = ""
   /** 当前订阅的收尾函数（关 EventSource + 清退避定时器） */
@@ -37,8 +44,8 @@
     error = ""
     try {
       const r = await fetchTaskContext(id)
-      // 重拉快照不丢实时内容：按消息 id 收敛（live 是更新的权威内容）
-      messages = mergeLive(r.page, liveMessages)
+      // 只覆盖快照侧；实时侧独立保存，两者由派生值 messages 收敛（实时内容不会被快照冲掉）
+      snapshotMessages = r.page
       total = r.total
       cursor = r.nextCursor
       hasMore = r.hasMore
@@ -49,14 +56,15 @@
     }
   }
 
-  /** 向前翻页：更早的消息 prepend 到头部，阅读位置不跳 */
+  /** 向前翻页：把更早的一页追加到快照侧尾部（快照页本身是「最新在前」，追加后全局仍是最新在前） */
   async function loadMore() {
     if (!cursor || loadingMore) return
     loadingMore = true
     error = ""
     try {
       const r = await fetchTaskContext(task.id, cursor)
-      messages = [...r.page, ...messages]
+      // 追加而非前置：更早的一页本来就比已加载的更旧，前置会把顺序倒过来
+      snapshotMessages = [...snapshotMessages, ...r.page]
       cursor = r.nextCursor
       hasMore = r.hasMore
     } catch (e) {
@@ -89,9 +97,8 @@
     if (!sessionID) return
     stopLive = connectLiveContext(task.id, {
       onMessages: (live) => {
-        // 快照与增量按消息 id 收敛（审查重点 3）：live 覆盖同 id 的快照消息
+        // 实时侧整体覆盖（状态机自持的累积结果）；展示列表由派生值 messages 收敛
         liveMessages = live
-        messages = mergeLive(messages, live)
       },
       onStatus: (s) => {
         liveStatus = s
@@ -115,9 +122,9 @@
       onclick={loadMore}
       disabled={loadingMore}
     >
-      {loadingMore ? "加载中…" : `加载更早的消息（已加载 ${messages.length} / 共 ${total} 条）`}
+      {loadingMore ? "加载中…" : `加载更早的消息（已加载 ${snapshotMessages.length} / 共 ${total} 条）`}
     </button>
-  {:else if messages.length > 0 && total > messages.length}
+  {:else if snapshotMessages.length > 0 && total > snapshotMessages.length}
     <span class="text-center text-xs text-muted-foreground">已加载全部 {total} 条</span>
   {:else if messages.length > 0}
     <span class="text-center text-xs text-muted-foreground">共 {total} 条消息</span>

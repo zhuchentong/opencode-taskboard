@@ -134,14 +134,18 @@ export function liveSessionID(task: { claim?: { sessionID?: string } }): string 
  * 收敛快照与实时消息（审查重点 3）：按消息 id 整组替换，不重复不丢失。
  *
  * 两侧的数据形态：
- * - 快照是服务端分页读出的完整消息（时间倒序，最新在前）；
- * - 实时是状态机自持的增量累积结果（同为倒序），只含本条实时流见过的消息。
+ * - 快照是服务端分页读出的完整消息，时间倒序（最新在前，src/context.ts 的 ORDER BY time_created DESC）；
+ * - 实时是状态机自持的增量累积结果，同为倒序，只含本条实时流见过的消息。
  *
- * 合并规则（快照在前，实时在后）：
- * - 快照里没有的 live 消息 → 按 live 顺序（最新在前）前置到结果头部；
- * - 快照里有的 live 消息 → 按 id 原位替换（live 版优先：实时是更新的权威内容）；
- * - 只存在于快照的消息 → 保留在后面（更早的消息不能丢）；
+ * 合并规则（结果恒为「最新在前」）：
+ * - 快照里有的 live 消息 → 按 id 原位替换（live 版优先：实时是更新的权威内容），位置不变；
+ * - 快照里没有的 live 消息 → 按其 time 插入到全局「最新在前」序中的正确位置
+ *   （不能一律前置到头部：长会话里实时侧会累出比快照首页更旧的消息，一律前置会把最旧的顶到最前）；
+ * - 只存在于快照的消息 → 保留；
  * - live 为空 → 原样返回快照。
+ *
+ * 前提：两侧各自按 time 倒序（快照页倒序拼接、实时侧新消息 unshift 到头部），
+ * 故用两路归并即可得到有序结果；同 id 只有一条（实时独有的那条不会同时出现在快照里）。
  *
  * 纯函数：不改入参、返回新数组；重复合并幂等（无副作用），
  * 因此「重拉快照」与「收到新帧」两条路径都能安全地反复调用。
@@ -155,16 +159,38 @@ export function mergeLive(snapshot: ContextMessage[], live: ContextMessage[]): C
   }
   const snapshotIDs = new Set<string>()
   for (const m of snapshot) snapshotIDs.add(m.id)
-  const out: ContextMessage[] = []
-  // live 独有（快照里没有）的消息：按 live 顺序前置到头部
+  // 实时独有（快照里没有）的消息：保持 live 的倒序，作为归并的第二路
+  const liveOnly: ContextMessage[] = []
   for (const m of live) {
     if (snapshotIDs.has(m.id)) continue
     if (liveById.get(m.id) !== m) continue // 同 id 重复项只取首个
-    out.push(m)
+    liveOnly.push(m)
   }
-  // 快照消息原位保留：live 有的按 id 替换（live 是更新的权威内容），没有的原样留下
-  for (const m of snapshot) {
-    out.push(liveById.get(m.id) ?? m)
+  // 两路归并：快照侧是骨架（相对顺序不变，只把同 id 的换成 live 版）
+  const out: ContextMessage[] = []
+  let si = 0
+  let li = 0
+  while (si < snapshot.length || li < liveOnly.length) {
+    if (li >= liveOnly.length) {
+      out.push(liveById.get(snapshot[si]!.id) ?? snapshot[si]!)
+      si++
+      continue
+    }
+    if (si >= snapshot.length) {
+      out.push(liveOnly[li]!)
+      li++
+      continue
+    }
+    const snapMsg = liveById.get(snapshot[si]!.id) ?? snapshot[si]!
+    const liveMsg = liveOnly[li]!
+    // 全局「最新在前」：时间更晚的在前（相等时实时在前——它更可能是刚产生的）
+    if (liveMsg.time >= snapMsg.time) {
+      out.push(liveMsg)
+      li++
+    } else {
+      out.push(snapMsg)
+      si++
+    }
   }
   return out
 }

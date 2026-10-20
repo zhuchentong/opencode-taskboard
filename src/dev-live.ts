@@ -26,6 +26,20 @@ export interface FakeLiveTimings {
   roundMs?: number
 }
 
+/**
+ * 定时器依赖（测试可注入假件：确定性驱动，还能直接断言「detach 后不再调度」）。
+ * 宿主方法要求 this 为 globalThis：作为对象属性被调用时接收者会变，必须显式绑定。
+ */
+export interface FakeLiveClock {
+  setTimeout(fn: () => void, ms: number): unknown
+  clearTimeout(handle: unknown): void
+}
+
+const realClock: FakeLiveClock = {
+  setTimeout: setTimeout.bind(globalThis),
+  clearTimeout: clearTimeout.bind(globalThis),
+}
+
 /** 默认节奏：慢到能看清打字机，快到不用干等 */
 const DEFAULT_TIMINGS: Required<FakeLiveTimings> = {
   startMs: 300,
@@ -46,17 +60,22 @@ const FAKE_TOOL_OUTPUT = "42 pass\nRan 42 tests"
  * 造一个 dev 假事件源：把模拟的帧喂给 send。
  * @param send 帧接收方（生产里是 server.ts 的 SSE 转发）
  * @param timings 各步间隔（默认慢节奏；测试注入小值）
+ * @param clock 定时器依赖（默认全局定时器；测试注入假件）
  * @returns detach：停掉待触发的定时器，不再发帧（不留悬挂定时器）
  */
-export function createFakeLive(send: (frame: LiveFrame) => void, timings?: FakeLiveTimings): () => void {
+export function createFakeLive(
+  send: (frame: LiveFrame) => void,
+  timings?: FakeLiveTimings,
+  clock: FakeLiveClock = realClock,
+): () => void {
   const t = { ...DEFAULT_TIMINGS, ...timings }
-  let timer: ReturnType<typeof setTimeout> | null = null
+  let timer: unknown = null
   let stopped = false
   let round = 0
 
   /** 排一个延时动作；已 detach 则不再执行 */
   const later = (fn: () => void, ms: number): void => {
-    timer = setTimeout(() => {
+    timer = clock.setTimeout(() => {
       timer = null
       if (stopped) return
       fn()
@@ -110,7 +129,7 @@ export function createFakeLive(send: (frame: LiveFrame) => void, timings?: FakeL
   return () => {
     stopped = true
     if (timer !== null) {
-      clearTimeout(timer)
+      clock.clearTimeout(timer)
       timer = null
     }
   }

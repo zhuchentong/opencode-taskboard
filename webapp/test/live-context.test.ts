@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { applyFrame, connectLiveContext, liveBackoffDelay, liveSessionID, mergeLive, type LiveFrame } from "../src/lib/live-context"
 import type { ContextMessage } from "../src/lib/context"
 
-const M = (id: string, parts: ContextMessage["parts"]): ContextMessage => ({ id, role: "assistant", time: 1, parts })
+const M = (id: string, parts: ContextMessage["parts"], time = 1): ContextMessage => ({ id, role: "assistant", time, parts })
 
 test("text-append 追加到最后一个 text part；无则创建占位并标记 streaming", () => {
   const msgs = applyFrame([M("m1", [{ type: "text", text: "a" }])], { type: "text-append", kind: "text", messageID: "m1", text: "b" })
@@ -99,11 +99,36 @@ test("mergeLive 以 live 消息按 id 替换/前置，保留仅存在于快照�
   expect(merged[0]!.parts).toEqual([{ type: "text", text: "实时版" }])
   expect(merged[0]!.streaming).toBe(true)
   expect(merged[1]!.parts).toEqual([{ type: "text", text: "更早的消息" }])
-  // live 只含新消息 → 前置到头部，旧消息保持在后
-  const liveNew = [M("m3", [{ type: "text", text: "新消息" }])]
+  // live 只含新消息 → 排到最前（它比快照里任何一条都新），旧消息保持在后
+  const liveNew = [M("m3", [{ type: "text", text: "新消息" }], 2)]
   const merged2 = mergeLive(snapshot, liveNew)
   expect(merged2.map((m) => m.id)).toEqual(["m3", "m1", "m2"])
   expect(merged2[1]!.parts).toEqual([{ type: "text", text: "快照版" }]) // 快照版未被污染
+})
+
+test("mergeLive：实时独有的消息比快照首页更旧时，插在正确位置（不是最前）", () => {
+  // 快照：m1(100) 最新、m2(90) 更早；实时独有 m9(95)：比 m1 老、比 m2 新
+  const snapshot = [M("m1", [{ type: "text", text: "一" }], 100), M("m2", [{ type: "text", text: "二" }], 90)]
+  const live = [M("m9", [{ type: "text", text: "夹在中间" }], 95)]
+  const out = mergeLive(snapshot, live)
+  expect(out.map((m) => m.id)).toEqual(["m1", "m9", "m2"])
+  expect(out.map((m) => m.time)).toEqual([100, 95, 90]) // 全局仍是「最新在前」
+})
+
+test("mergeLive：长会话（快照 50 条 + 实时累出 30 条）合并后 id 唯一、顺序不乱", () => {
+  // 审查实测过的场景：连接期间产生的消息超过一页 → 实时侧有一部分落在快照首页之外
+  const snapshot = Array.from({ length: 50 }, (_, i) => M(`s${i}`, [], 1000 - i))
+  const live = [
+    ...Array.from({ length: 20 }, (_, i) => M(`s${i}`, [], 1000 - i)), // 与快照首页重叠
+    ...Array.from({ length: 10 }, (_, i) => M(`old${i}`, [], 100 - i)), // 比快照首页更旧
+  ]
+  const out = mergeLive(snapshot, live)
+  expect(out).toHaveLength(60)
+  expect(new Set(out.map((m) => m.id)).size).toBe(60) // 无重复 id（keyed each 不炸）
+  expect(out[0]!.id).toBe("s0") // 最新的在最前
+  expect(out[out.length - 1]!.id).toBe("old9") // 最旧的在最后（不是最前）
+  const times = out.map((m) => m.time)
+  expect(times).toEqual([...times].sort((a, b) => b - a)) // 全局倒序
 })
 
 test("mergeLive 空 live → 原样返回快照（不新建数组）", () => {
