@@ -142,20 +142,21 @@ const realLiveDeps: LiveConnectDeps = {
   clearTimeout: clearTimeout.bind(globalThis),
 }
 
-/** 退避档位（毫秒）：1s → 2s → 4s → 8s */
-const BACKOFF_MS = [1000, 2000, 4000, 8000]
-/** 退避封顶：再往后一律 10s */
+/** 退避档位（毫秒）：1s → 2s → 4s，再往后封顶 10s */
+const BACKOFF_MS = [1000, 2000, 4000]
+/** 退避封顶：超出档位表一律 10s */
 const MAX_BACKOFF_MS = 10000
 /** 连续失败达此数即降级 off（终态，不再重连） */
 const FAILURE_THRESHOLD = 3
 
 /**
- * 第 failures 次失败后的重连等待时长（failures 从 1 起）：1s → 2s → 4s → 8s，再往后封顶 10s。
- * 单独导出便于钉住退避档位；状态机里当前阈值 3 只会用到前两档，后几档是防御性分支
+ * 第 failures 次失败后的重连等待时长（failures 从 1 起）：1s → 2s → 4s，再往后封顶 10s。
+ * failures < 1 表示「还没失败过」，无等待可言，返回 0。
+ * 单独导出便于钉住退避档位；状态机里当前阈值 3 只会用到前两档，4s 及封顶档是防御性分支
  * （真要放宽失败阈值时档位表直接可用，不必改实现）。
  */
 export function liveBackoffDelay(failures: number): number {
-  if (failures <= 1) return BACKOFF_MS[0]!
+  if (failures < 1) return 0
   if (failures > BACKOFF_MS.length) return MAX_BACKOFF_MS
   return Math.min(BACKOFF_MS[failures - 1]!, MAX_BACKOFF_MS)
 }
@@ -167,6 +168,8 @@ export function liveBackoffDelay(failures: number): number {
  * - onopen → onStatus("live")，失败计数清零（重连成功即恢复）。
  * - onerror → 关闭本连接（EventSource 自带重连，会与手动退避打架），按 1s/2s 退避重建；
  *   连续 3 次失败 → onStatus("off") 终态：不再重连，只剩快照与手动刷新。
+ *   出错的连接立即作废：其迟到的 error/open 回调一律拒收（不重复累加失败计数、
+ *   不把已死连接复活成 live、不取消待触发的重连）。
  * - onmessage → JSON.parse 后 applyFrame，每帧回调 onMessages（内部自持消息数组，初始 []）。
  * - message-end 不是终态：它只定格消息，连接保持打开接下一回合。
  *
@@ -213,17 +216,22 @@ export function connectLiveContext(
     if (stopped || dead) return
     const s = new d.EventSource(url)
     es = s
+    // 本连接一旦出错即作废：close 之后浏览器仍可能派发迟到的 error/open 回调——
+    // 收下会重复累加失败计数（或把已死连接复活成 live 并取消待触发的重连），
+    // 故用 failed 标记把该实例后续一切回调拒收
+    let failed = false
 
     s.onopen = () => {
-      // 过期连接（已被重建取代）或已降级终态的回调不参与状态机
-      if (stopped || dead || es !== s) return
+      // 过期连接（已被重建取代）、已失败连接或已降级终态的回调不参与状态机
+      if (stopped || dead || failed || es !== s) return
       failures = 0
       clearRetry()
       handlers.onStatus("live")
     }
 
     s.onerror = () => {
-      if (stopped || dead || es !== s) return
+      if (stopped || dead || failed || es !== s) return
+      failed = true
       failures++
       // EventSource 自带重连：手动退避前先关掉，否则两个重连源打架
       s.close()
@@ -234,20 +242,21 @@ export function connectLiveContext(
         handlers.onStatus("off")
         return
       }
-      handlers.onStatus("reconnecting")
+      // 先排退避再上报状态：消费方的 onStatus 若抛错，也不能连带把重连排程吃掉
       scheduleReconnect()
+      handlers.onStatus("reconnecting")
     }
 
     s.onmessage = (e) => {
-      if (stopped || dead || es !== s) return
-      let frame: LiveFrame
+      if (stopped || dead || failed || es !== s) return
       try {
-        frame = JSON.parse(e.data) as LiveFrame
+        const frame = JSON.parse(e.data) as LiveFrame
+        messages = applyFrame(messages, frame)
       } catch {
-        // 非 JSON 帧（心跳注释不会进 onmessage）忽略：不得让一条坏帧打断整条流
+        // 非 JSON 帧（心跳注释不会进 onmessage）或形状非法的帧（applyFrame 抛错）：
+        // 忽略——一条坏帧不得打断整条流，也不得从事件回调里冒出未捕获异常
         return
       }
-      messages = applyFrame(messages, frame)
       handlers.onMessages(messages)
     }
   }

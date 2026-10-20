@@ -259,7 +259,9 @@ export function createServer(
   async function handleLive(req: Request, taskID: string): Promise<Response> {
     const task = await store.get(taskID)
     const sessionID = task.claim?.sessionID || null
-    // 无会话（未领取/human claim）或 hub 未接线：一帧 message-end 即关流，前端据此不重试
+    // 无会话（未领取/human claim）或 hub 未接线：一帧 message-end 即关流。
+    // 前端契约：message-end 只定格消息，「连接关闭」才是实时流终止（→ 退避重连 → 连续三败降级 off）；
+    // 无会话的任务由前端在「任务无 sessionID」时根本不开 EventSource 来避免重试风暴。
     if (!sessionID || !opts.subscribeLive) {
       return new Response(
         new ReadableStream<Uint8Array>({

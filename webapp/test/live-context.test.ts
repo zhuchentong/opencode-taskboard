@@ -205,8 +205,9 @@ describe("connectLiveContext", () => {
     expect(timers.pending()[0]!.ms).toBe(2000)
     timers.fire(2000)
     expect(FakeES.instances).toHaveLength(3)
-    // 退避档位表本身：1s/2s/4s/8s 封顶 10s
-    expect([1, 2, 3, 4, 5, 9].map(liveBackoffDelay)).toEqual([1000, 2000, 4000, 8000, 10000, 10000])
+    // 退避档位表本身：1s/2s/4s，再往后封顶 10s（failures 从 1 起；0 = 没失败过）
+    expect([1, 2, 3, 4, 5, 9].map(liveBackoffDelay)).toEqual([1000, 2000, 4000, 10000, 10000, 10000])
+    expect(liveBackoffDelay(0)).toBe(0)
   })
 
   test("连续 3 次 error → onStatus('off')，EventSource 关闭，不再重连", () => {
@@ -240,13 +241,20 @@ describe("connectLiveContext", () => {
     expect(last[0]!.parts).toEqual([{ type: "text", text: "回合一" }])
   })
 
-  test("cleanup 关掉 EventSource 并清空全部定时器（含未到点的退避定时器），之后不再重连", () => {
-    const { timers, dispose, es } = start()
+  test("cleanup 关闭当前连接", () => {
+    const { dispose, es } = start()
     const es1 = es()
-    es1.fail() // 排一个未到点的退避定时器
-    expect(timers.pending()).toHaveLength(1)
+    es1.open()
+    expect(es1.closed).toBe(false) // dispose 前连接是开着的（否则下面的断言是空断言）
     dispose()
     expect(es1.closed).toBe(true)
+  })
+
+  test("cleanup 清空待触发退避定时器（含未到点的退避定时器），之后不再重连", () => {
+    const { timers, dispose, es } = start()
+    es().fail() // 排一个未到点的退避定时器
+    expect(timers.pending()).toHaveLength(1)
+    dispose()
     expect(timers.regs.every((r) => r.cleared)).toBe(true)
     timers.fire(1000)
     expect(FakeES.instances).toHaveLength(1) // cleanup 后不再重连
@@ -302,5 +310,56 @@ describe("connectLiveContext", () => {
     es3.open()
     expect(states).toEqual(snapshot) // 终态后不再重复上报
     expect(FakeES.instances).toHaveLength(3)
+  })
+
+  test("失败后同实例再 error/open 不改变状态机（不重复累加失败、不复活成 live、不取消待触发的重连）", () => {
+    const { states, timers, es } = start()
+    const es1 = es()
+    es1.fail()
+    expect(states).toEqual(["reconnecting"])
+    expect(timers.pending()).toHaveLength(1)
+    const pending = timers.pending()[0]!
+    es1.fail() // 同一实例再报错：不得重复累加失败计数（否则跳过 1s 档、甚至提前降级）
+    es1.open() // 迟到的 open：不得把状态改回 live、不得取消待触发的重连
+    expect(states).toEqual(["reconnecting"])
+    expect(timers.pending()).toHaveLength(1)
+    expect(timers.pending()[0]).toBe(pending) // 仍是同一个定时器（没被清掉重排）
+    timers.fire(1000)
+    expect(FakeES.instances).toHaveLength(2) // 照常按 1s 退避重连
+  })
+
+  test("形状非法的帧（如 content 缺 parts）→ 吞掉，不抛、不改消息数组", () => {
+    const { messages, states, es } = start()
+    es().open()
+    es().frame({ type: "text-append", kind: "text", messageID: "m1", text: "甲" })
+    const before = messages.length
+    expect(() => es().frame({ type: "content", messageID: "m1" })).not.toThrow()
+    expect(messages).toHaveLength(before) // 消息数组未被改动
+    expect(states.at(-1)).toBe("live") // 坏帧不打断整条流
+  })
+
+  test("onStatus 抛错不影响重连排程（先排退避再上报状态）", () => {
+    FakeES.instances = []
+    const timers = fakeTimers()
+    const states: string[] = []
+    const dispose = connectLiveContext(
+      "t1",
+      {
+        onMessages: () => {},
+        onStatus: (s: string) => {
+          states.push(s)
+          if (s === "reconnecting") throw new Error("消费方回调炸了")
+        },
+      },
+      { EventSource: FakeES as never, setTimeout: timers.set, clearTimeout: timers.clear },
+    )
+    const es1 = FakeES.instances[0]!
+    expect(() => es1.fail()).toThrow("消费方回调炸了") // 异常照旧冒给调用方
+    expect(states).toEqual(["reconnecting"])
+    expect(timers.pending()).toHaveLength(1) // 排程没被回调异常吃掉
+    expect(timers.pending()[0]!.ms).toBe(1000)
+    timers.fire(1000)
+    expect(FakeES.instances).toHaveLength(2) // 照常重连
+    dispose()
   })
 })
