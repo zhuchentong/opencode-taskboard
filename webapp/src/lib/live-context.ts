@@ -15,7 +15,7 @@
 //   （消息定格），连接保持打开接下一回合；连接出错/关闭才是实时流终止 → 退避重连。
 //   把 message-end 当终态会让 worker 的第二回合收不到帧。
 // - 连续 3 次失败降级 off（终态，不再重连），只保留快照与手动刷新。
-import type { ContextMessage } from "./context"
+import type { ContextMessage, ContextPart } from "./context"
 
 /** 看板消费的实时帧：文本增量 / 整段内容 / 消息结束（与服务端 src/live.ts 逐字对齐） */
 export type LiveFrame =
@@ -144,6 +144,9 @@ export function liveSessionID(task: { claim?: { sessionID?: string } }): string 
  * - 只存在于快照的消息 → 保留；
  * - live 为空 → 原样返回快照。
  *
+ * role 以快照侧为准：帧协议不带 role，实时侧新建的消息恒为 assistant——
+ * 直接拿实时版替换会把快照里的 user 消息（worker 指令）显示成 🤖 worker。
+ *
  * 前提：两侧各自按 time 倒序（快照页倒序拼接、实时侧新消息 unshift 到头部），
  * 故用两路归并即可得到有序结果；同 id 只有一条（实时独有的那条不会同时出现在快照里）。
  *
@@ -166,13 +169,19 @@ export function mergeLive(snapshot: ContextMessage[], live: ContextMessage[]): C
     if (liveById.get(m.id) !== m) continue // 同 id 重复项只取首个
     liveOnly.push(m)
   }
+  /** 同 id 替换：取实时版内容，但 role 以快照侧为准（实时侧 role 不可信） */
+  const pick = (snapMsg: ContextMessage): ContextMessage => {
+    const liveMsg = liveById.get(snapMsg.id)
+    if (!liveMsg) return snapMsg
+    return liveMsg.role === snapMsg.role ? liveMsg : { ...liveMsg, role: snapMsg.role }
+  }
   // 两路归并：快照侧是骨架（相对顺序不变，只把同 id 的换成 live 版）
   const out: ContextMessage[] = []
   let si = 0
   let li = 0
   while (si < snapshot.length || li < liveOnly.length) {
     if (li >= liveOnly.length) {
-      out.push(liveById.get(snapshot[si]!.id) ?? snapshot[si]!)
+      out.push(pick(snapshot[si]!))
       si++
       continue
     }
@@ -181,7 +190,7 @@ export function mergeLive(snapshot: ContextMessage[], live: ContextMessage[]): C
       li++
       continue
     }
-    const snapMsg = liveById.get(snapshot[si]!.id) ?? snapshot[si]!
+    const snapMsg = pick(snapshot[si]!)
     const liveMsg = liveOnly[li]!
     // 全局「最新在前」：时间更晚的在前（相等时实时在前——它更可能是刚产生的）
     if (liveMsg.time >= snapMsg.time) {
@@ -195,10 +204,110 @@ export function mergeLive(snapshot: ContextMessage[], live: ContextMessage[]): C
   return out
 }
 
+// —— 快照播种（seed）——
+//
+// 问题：实时流的首帧常常是「增量片段」（用户中途打开标签页，状态机没见过这条消息），
+// mergeLive 同 id 整体替换 → 快照里已有的正文被片段顶掉（正文被抹）。
+//
+// 方案：把快照播种进状态机自持的消息数组，让实时侧的每条消息一开始就带着快照正文，
+// 之后到达的增量往它上面追加（applyTextAppend 追加到最后一个同 kind part，口径一致）。
+//
+// 播种语义（同一 id 已有实时消息时）：
+// - 实时文本以快照文本开头 → 保留实时版（总线领先于 DB，实时版是快照的超集）；
+// - 实时片段已含在快照正文里 → 用快照正文（DB 领先且已含该片段，不重复追加）；
+// - 其余 → 快照文本在前、实时片段在后（DB 领先于总线，主导场景）。
+//
+// 幂等：重复播种同一快照不产生变化（首播后实时文本已以快照文本开头，前缀检查自然命中保留分支）。
+
+/** 取 part 数组里最后一个指定 kind 的下标（增量追加落在最后一个同 kind part 上，合并口径与之对齐） */
+function lastIndexOfKind(parts: ContextPart[], kind: "text" | "reasoning"): number {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i]!.type === kind) return i
+  }
+  return -1
+}
+
+/** 同 kind 正文合并（见上方播种语义） */
+function mergeKindText(snapText: string, liveText: string): string {
+  if (!snapText) return liveText // 快照没有正文：实时版原样
+  if (!liveText) return snapText // 实时还没有正文：用快照正文
+  if (liveText.startsWith(snapText)) return liveText // 总线领先于 DB：保留实时版
+  if (snapText.includes(liveText)) return snapText // DB 已含该片段：不重复追加
+  return snapText + liveText // DB 领先于总线：快照文本在前、实时片段在后
+}
+
+/**
+ * 播种合并：把一条快照消息与实时侧同 id 的消息合并成一条。
+ * role / time 以快照侧为准（DB 才是消息的权威来源）；正文按 mergeKindText 合并。
+ * 没变化时原样返回（幂等：重复播种不产新对象、不惊动消费方）。
+ */
+export function mergeSeededMessage(snap: ContextMessage, live: ContextMessage): ContextMessage {
+  const parts = [...live.parts]
+  let changed = false
+  for (const kind of ["text", "reasoning"] as const) {
+    const si = lastIndexOfKind(snap.parts, kind)
+    if (si === -1) continue // 快照没有该 kind：实时版原样
+    const snapPart = snap.parts[si]!
+    const li = lastIndexOfKind(parts, kind)
+    if (li === -1) {
+      // 实时版没有该 kind：补上快照的 part（快照正文更完整）
+      parts.push({ ...snapPart })
+      changed = true
+      continue
+    }
+    const merged = mergeKindText(snapPart.text ?? "", parts[li]!.text ?? "")
+    if (merged !== (parts[li]!.text ?? "")) {
+      parts[li] = { ...parts[li]!, text: merged }
+      changed = true
+    }
+  }
+  if (!changed && snap.role === live.role && snap.time === live.time) return live // 无变化 → 原对象（幂等）
+  return { ...live, role: snap.role, time: snap.time, parts }
+}
+
+/** 按 time 插入到倒序列表（最新在前）；同 time 时插在已有同 time 消息之后 */
+function insertByTime(list: ContextMessage[], msg: ContextMessage): ContextMessage[] {
+  const idx = list.findIndex((m) => m.time < msg.time)
+  if (idx === -1) return [...list, msg]
+  return [...list.slice(0, idx), msg, ...list.slice(idx)]
+}
+
+/**
+ * 把快照播种进实时侧消息数组（纯函数、幂等）：
+ * - 快照里状态机没有的消息 → 按 time 插入（倒序）；
+ * - 同 id 已有实时消息 → 按 mergeSeededMessage 合并（快照正文在前或保留实时版）；
+ * - 只在实时侧的消息 → 原样保留（播种不该动它们）。
+ */
+export function seedMessages(live: ContextMessage[], snapshot: ContextMessage[]): ContextMessage[] {
+  if (snapshot.length === 0) return live
+  let out = live
+  for (const snap of snapshot) {
+    const idx = out.findIndex((m) => m.id === snap.id)
+    if (idx === -1) {
+      out = insertByTime(out, snap)
+      continue
+    }
+    const merged = mergeSeededMessage(snap, out[idx]!)
+    if (merged === out[idx]) continue // 无变化（幂等）
+    const next = [...out]
+    next[idx] = merged
+    out = next
+  }
+  return out
+}
+
 // —— 订阅状态机（connectLiveContext）——
 
 /** 实时订阅的连接态：live=实时中；reconnecting=断线退避重连中；off=连续三败降级（终态） */
 export type LiveStatus = "live" | "reconnecting" | "off"
+
+/** 实时订阅句柄：播种快照（seed）与收尾（dispose） */
+export interface LiveContextHandle {
+  /** 把快照播种进状态机自持的消息数组（幂等；无变化时不回调 onMessages） */
+  seed(messages: ContextMessage[]): void
+  /** 关闭连接并清空全部定时器 */
+  dispose(): void
+}
 
 /** 订阅依赖：EventSource 与定时器可注入，测试用假件确定性驱动 */
 export interface LiveConnectDeps {
@@ -251,10 +360,13 @@ export function liveBackoffDelay(failures: number): number {
  * - onmessage → JSON.parse 后 applyFrame，每帧回调 onMessages（内部自持消息数组，初始 []）。
  * - message-end 不是终态：它只定格消息，连接保持打开接下一回合。
  *
+ * 快照播种（seed）：把快照并进状态机自持的数组，让实时侧的消息一开始就有完整正文——
+ * 没有它，实时流首帧（增量片段）会把快照正文整体顶掉（正文被抹）。
+ *
  * @param taskID 任务 ID（进 URL 前做 encodeURIComponent）
  * @param handlers 帧应用结果与连接态回调
  * @param deps 可注入的依赖（与内置默认合并，测试只覆盖需要替换的部分）
- * @returns cleanup：关闭连接并清空全部定时器
+ * @returns 句柄：seed（播种快照）与 dispose（关连接、清定时器）
  */
 export function connectLiveContext(
   taskID: string,
@@ -263,7 +375,7 @@ export function connectLiveContext(
     onStatus(s: LiveStatus): void
   },
   deps?: Partial<LiveConnectDeps>,
-): () => void {
+): LiveContextHandle {
   const d: LiveConnectDeps = { ...realLiveDeps, ...deps }
   const url = `/api/tasks/${encodeURIComponent(taskID)}/context/live`
 
@@ -341,9 +453,28 @@ export function connectLiveContext(
 
   open()
 
-  return () => {
-    stopped = true
-    clearRetry()
-    es?.close()
+  return {
+    seed(snapshot) {
+      if (stopped) return // 订阅已收尾：播种无人消费
+      const next = seedMessages(messages, snapshot)
+      if (next === messages) return // 无变化（幂等）：不必惊动消费方
+      messages = next
+      handlers.onMessages(messages)
+    },
+    dispose() {
+      stopped = true
+      clearRetry()
+      es?.close()
+    },
   }
+}
+
+/**
+ * 收到某连接态时要不要重拉快照（规格 §4.3 / §6：断线 → 关流 → 重拉快照 → 退避重连）。
+ *
+ * 断线窗口内产生的消息永远不上屏——不重拉就永远缺那一段。
+ * off 是连续三败的终态：同样重拉一次（此后只保留快照与手动刷新）。
+ */
+export function shouldReloadSnapshot(status: LiveStatus): boolean {
+  return status === "reconnecting" || status === "off"
 }

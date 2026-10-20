@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test"
-import { applyFrame, connectLiveContext, liveBackoffDelay, liveSessionID, mergeLive, type LiveFrame } from "../src/lib/live-context"
+import {
+  applyFrame,
+  connectLiveContext,
+  liveBackoffDelay,
+  liveSessionID,
+  mergeLive,
+  mergeSeededMessage,
+  seedMessages,
+  shouldReloadSnapshot,
+  type LiveFrame,
+} from "../src/lib/live-context"
 import type { ContextMessage } from "../src/lib/context"
 
 const M = (id: string, parts: ContextMessage["parts"], time = 1): ContextMessage => ({ id, role: "assistant", time, parts })
@@ -66,6 +76,21 @@ test("未知帧类型不产变化：返回原数组（镜像类型与服务端�
 test("now 参数可注入：新消息时间戳用它（纯函数可测）", () => {
   const created = applyFrame([], { type: "text-append", kind: "text", messageID: "m2", text: "x" }, 12345)
   expect(created[0]!.time).toBe(12345)
+})
+
+// —— 服务端帧序在前端的落地：正文不得翻倍 ——
+
+test("content 帧作废待冲 delta 后的帧序（content → 新增量）：最终文本恰为 Hello!", () => {
+  // 服务端口径：content 帧到达时同消息的待冲 delta 已作废，之后的新增量照发
+  let msgs = applyFrame([], { type: "content", messageID: "m1", parts: [{ type: "text", text: "Hello" }] })
+  msgs = applyFrame(msgs, { type: "text-append", kind: "text", messageID: "m1", text: "!" })
+  expect(msgs[0]!.parts).toEqual([{ type: "text", text: "Hello!" }])
+})
+
+test("冲刷边界的帧序（增量在前、content 在后）：最终文本恰为 Hello（不翻倍）", () => {
+  let msgs = applyFrame([], { type: "text-append", kind: "text", messageID: "m1", text: "Hello" })
+  msgs = applyFrame(msgs, { type: "content", messageID: "m1", parts: [{ type: "text", text: "Hello" }] })
+  expect(msgs[0]!.parts).toEqual([{ type: "text", text: "Hello" }]) // content 是权威快照，整体替换
 })
 
 test("applyFrame 返回新数组不改入参（Svelte $state 兼容）", () => {
@@ -163,6 +188,112 @@ test("mergeLive 同 id 的 live 重复项只取首个（防御状态机外的脏
   expect(out[0]!.parts).toEqual([{ type: "text", text: "首个" }])
 })
 
+test("mergeLive 同 id 替换时保留快照侧的 role（实时帧协议不带 role，实时侧恒为 assistant 不可信）", () => {
+  // 快照里是 user 消息（worker 指令），实时侧同 id 的版本 role 是 assistant
+  const snapshot = [{ ...M("m1", [{ type: "text", text: "请完成任务" }]), role: "user" }]
+  const live = [{ ...M("m1", [{ type: "text", text: "请完成任务" }]), role: "assistant", streaming: true }]
+  const out = mergeLive(snapshot, live)
+  expect(out[0]!.role).toBe("user") // 不能把 worker 指令显示成 🤖 worker
+  expect(out[0]!.parts).toEqual([{ type: "text", text: "请完成任务" }]) // 正文仍取实时版
+})
+
+// —— 快照播种（seed）：实时流首帧是增量片段时，正文不被抹掉 ——
+
+test("seed 后再来的增量接在快照正文之后（快照正文不被抹）", () => {
+  const { handle, es, messages } = start()
+  handle.seed([M("m1", [{ type: "text", text: "Hello" }])])
+  es().frame({ type: "text-append", kind: "text", messageID: "m1", text: " world" })
+  const last = messages.at(-1)!
+  expect(last[0]!.parts).toEqual([{ type: "text", text: "Hello world" }])
+})
+
+test("增量先到、后 seed：快照正文在前、实时片段在后（DB 领先于总线）", () => {
+  const { handle, es, messages } = start()
+  es().frame({ type: "text-append", kind: "text", messageID: "m1", text: " world" })
+  handle.seed([M("m1", [{ type: "text", text: "Hello" }])])
+  const last = messages.at(-1)!
+  expect(last[0]!.parts).toEqual([{ type: "text", text: "Hello world" }])
+})
+
+test("seed 幂等：重复播种同一快照不产生变化（也不重复回调）", () => {
+  const { handle, messages } = start()
+  const snap = [M("m1", [{ type: "text", text: "Hello" }])]
+  handle.seed(snap)
+  const afterFirst = messages.length
+  handle.seed(snap)
+  handle.seed(snap)
+  expect(messages.length).toBe(afterFirst) // 无变化 → 不惊动消费方
+  const last = messages.at(-1)!
+  expect(last).toHaveLength(1)
+  expect(last[0]!.parts).toEqual([{ type: "text", text: "Hello" }])
+})
+
+test("seed 只在实时侧的消息不受影响（仍按 time 倒序）", () => {
+  const { handle, es, messages } = start()
+  es().frame({ type: "text-append", kind: "text", messageID: "m2", text: "实时独有" })
+  handle.seed([M("m1", [{ type: "text", text: "Hello" }], 1)])
+  const last = messages.at(-1)!
+  expect(last.map((m) => m.id)).toEqual(["m2", "m1"]) // 实时独有（time=now）在前，播种进来的旧消息在后
+  expect(last[0]!.parts).toEqual([{ type: "text", text: "实时独有" }])
+  expect(last[1]!.parts).toEqual([{ type: "text", text: "Hello" }])
+})
+
+test("片段之后来 content 帧（完整 parts）→ 整体替换、不重复", () => {
+  const { handle, es, messages } = start()
+  es().frame({ type: "text-append", kind: "text", messageID: "m1", text: " world" })
+  es().frame({ type: "content", messageID: "m1", parts: [{ type: "text", text: "Hello world" }] })
+  handle.seed([M("m1", [{ type: "text", text: "Hello" }])])
+  const last = messages.at(-1)!
+  expect(last[0]!.parts).toEqual([{ type: "text", text: "Hello world" }]) // 既不重复也不被抹
+})
+
+test("seed 后快照里的 role 覆盖实时侧的 assistant（worker 指令不被显示成 worker）", () => {
+  const { handle, es, messages } = start()
+  es().frame({ type: "text-append", kind: "text", messageID: "m1", text: "尾巴" })
+  handle.seed([{ ...M("m1", [{ type: "text", text: "请完成任务" }]), role: "user" }])
+  const last = messages.at(-1)!
+  expect(last[0]!.role).toBe("user")
+  expect(last[0]!.parts).toEqual([{ type: "text", text: "请完成任务尾巴" }])
+})
+
+test("seedMessages（纯函数）：实时文本已覆盖快照正文时保留实时版（总线领先于 DB）", () => {
+  const live = [M("m1", [{ type: "text", text: "Hello world" }], 5)]
+  const out = seedMessages(live, [M("m1", [{ type: "text", text: "Hello" }], 5)])
+  expect(out[0]!.parts).toEqual([{ type: "text", text: "Hello world" }])
+})
+
+test("seedMessages（纯函数）：实时片段已含在快照正文里时不重复追加", () => {
+  const live = [M("m1", [{ type: "text", text: " world" }], 5)]
+  const out = seedMessages(live, [M("m1", [{ type: "text", text: "Hello world" }], 5)])
+  expect(out[0]!.parts).toEqual([{ type: "text", text: "Hello world" }])
+})
+
+test("mergeSeededMessage（纯函数）：role 与 time 以快照侧为准，正文按合并口径拼接", () => {
+  const merged = mergeSeededMessage(
+    { ...M("m1", [{ type: "text", text: "Hello" }], 42), role: "user" },
+    M("m1", [{ type: "text", text: " world" }], 99),
+  )
+  expect(merged.role).toBe("user")
+  expect(merged.time).toBe(42)
+  expect(merged.parts).toEqual([{ type: "text", text: "Hello world" }])
+})
+
+test("seedMessages（纯函数）：不改入参", () => {
+  const live = [M("m1", [{ type: "text", text: "a" }], 5)]
+  const snap = [M("m1", [{ type: "text", text: "b" }], 5)]
+  const before = JSON.stringify({ live, snap })
+  seedMessages(live, snap)
+  expect(JSON.stringify({ live, snap })).toBe(before)
+})
+
+// —— 断线重拉快照（规格 §4.3/§6）——
+
+test("shouldReloadSnapshot：断线（reconnecting/off）要重拉快照，实时中不拉", () => {
+  expect(shouldReloadSnapshot("live")).toBe(false) // 实时中不重拉（否则本地 HTTP 被刷爆）
+  expect(shouldReloadSnapshot("reconnecting")).toBe(true) // 断线窗口内的消息必须补回来
+  expect(shouldReloadSnapshot("off")).toBe(true) // 降级终态：最后拉一次快照兜底
+})
+
 // —— connectLiveContext 订阅状态机 ——
 
 // 可控的假 EventSource（与 events.test.ts 同款假件模式）
@@ -243,12 +374,20 @@ function start(taskID = "t1") {
   FakeES.instances = []
   const { handlers, messages, states } = liveHandlers()
   const timers = fakeTimers()
-  const dispose = connectLiveContext(taskID, handlers, {
+  const handle = connectLiveContext(taskID, handlers, {
     EventSource: FakeES as never,
     setTimeout: timers.set,
     clearTimeout: timers.clear,
   })
-  return { handlers, messages, states, timers, dispose, es: () => FakeES.instances[FakeES.instances.length - 1]! }
+  return {
+    handlers,
+    messages,
+    states,
+    timers,
+    handle,
+    dispose: () => handle.dispose(),
+    es: () => FakeES.instances[FakeES.instances.length - 1]!,
+  }
 }
 
 describe("connectLiveContext", () => {
@@ -425,7 +564,7 @@ describe("connectLiveContext", () => {
     FakeES.instances = []
     const timers = fakeTimers()
     const states: string[] = []
-    const dispose = connectLiveContext(
+    const handle = connectLiveContext(
       "t1",
       {
         onMessages: () => {},
@@ -443,6 +582,6 @@ describe("connectLiveContext", () => {
     expect(timers.pending()[0]!.ms).toBe(1000)
     timers.fire(1000)
     expect(FakeES.instances).toHaveLength(2) // 照常重连
-    dispose()
+    handle.dispose()
   })
 })

@@ -2,7 +2,14 @@
   import { onDestroy } from "svelte"
   import { fetchTaskContext } from "$lib/api"
   import { emptyHint, roleMeta, toolStateIcon, toolSummary, type ContextMessage } from "$lib/context"
-  import { connectLiveContext, liveSessionID, mergeLive, type LiveStatus } from "$lib/live-context"
+  import {
+    connectLiveContext,
+    liveSessionID,
+    mergeLive,
+    shouldReloadSnapshot,
+    type LiveContextHandle,
+    type LiveStatus,
+  } from "$lib/live-context"
   import type { Task } from "$lib/types"
   import { formatClock } from "$lib/duration"
   import Markdown from "./Markdown.svelte"
@@ -29,10 +36,18 @@
   let liveStatus = $state<LiveStatus>("off")
   /** 当前实时订阅的键（任务 ID + 会话 ID）：键不变就不重建订阅（普通变量，不进响应式依赖） */
   let liveKey = ""
-  /** 当前订阅的收尾函数（关 EventSource + 清退避定时器） */
-  let stopLive: (() => void) | null = null
+  /** 当前订阅句柄（seed 播种快照、dispose 收尾） */
+  let stopLive: LiveContextHandle | null = null
   /** 已拉过快照的任务 ID（普通变量）：换任务才回到「加载中」态，后台刷新不遮住消息列表 */
   let loadedFor = ""
+  /**
+   * 快照首页（最近一页）：播种给实时状态机用。
+   * 只存首页——loadMore 拿回的更早页不播种：增量只流向最新消息，
+   * 老页播种只会让状态机数组无界膨胀。
+   */
+  let firstPage: ContextMessage[] = []
+  /** firstPage 所属的任务 ID：换任务前的老快照不得播进新任务的状态机 */
+  let firstPageFor = ""
 
   async function load() {
     const id = task.id
@@ -40,19 +55,29 @@
       // 只有换任务的首拉显示加载态；同任务的后台刷新保留已渲染的消息（实时视图不被清空）
       loading = true
       loadedFor = id
+      firstPage = []
+      firstPageFor = ""
     }
     error = ""
     try {
       const r = await fetchTaskContext(id)
+      // 任务已切换：过期响应作废（否则旧任务的快照会覆盖新任务，
+      // 还会被播进新任务的实时状态机——断线重拉让并发 load 变多，这条更得守住）
+      if (id !== task.id) return
       // 只覆盖快照侧；实时侧独立保存，两者由派生值 messages 收敛（实时内容不会被快照冲掉）
       snapshotMessages = r.page
       total = r.total
       cursor = r.nextCursor
       hasMore = r.hasMore
+      // 播种首页到实时状态机：实时流首帧常是增量片段，没有播种就会用片段整体替换快照正文（正文被抹）
+      firstPage = r.page
+      firstPageFor = id
+      stopLive?.seed(r.page)
     } catch (e) {
+      if (id !== task.id) return
       error = e instanceof Error ? e.message : String(e)
     } finally {
-      loading = false
+      if (id === task.id) loading = false
     }
   }
 
@@ -88,7 +113,7 @@
     const key = `${task.id}\u0000${sessionID}`
     if (key === liveKey) return // 键未变：保持现有订阅
     liveKey = key
-    stopLive?.()
+    stopLive?.dispose()
     stopLive = null
     liveMessages = []
     liveStatus = "off"
@@ -102,14 +127,20 @@
       },
       onStatus: (s) => {
         liveStatus = s
-        if (s === "off" && !messages.length) void load() // 降级时兜底一次快照
+        // 断线 → 重拉快照（规格 §4.3/§6）：断线窗口内产生的消息永远不上屏。
+        // reconnecting 每次重试都拉一次可接受（本地 HTTP 便宜）；load() 会把快照侧重置回首页，
+        // 属收敛优先的可接受行为（翻页加载的更早页会在下次刷新时重新拉回）。
+        if (shouldReloadSnapshot(s)) void load()
       },
     })
+    // 重建订阅（换任务 / 换会话）后重播快照：新状态机是空数组，
+    // 没有重播的话实时流首帧（增量片段）会整体替换掉快照正文
+    if (firstPageFor === task.id) stopLive.seed(firstPage)
   })
 
   // 组件销毁时收尾：关流 + 清退避定时器
   onDestroy(() => {
-    stopLive?.()
+    stopLive?.dispose()
     stopLive = null
   })
 </script>
