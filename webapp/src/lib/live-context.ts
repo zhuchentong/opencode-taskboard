@@ -213,11 +213,14 @@ export function mergeLive(snapshot: ContextMessage[], live: ContextMessage[]): C
 // 之后到达的增量往它上面追加（applyTextAppend 追加到最后一个同 kind part，口径一致）。
 //
 // 播种语义（同一 id 已有实时消息时）：
+// - **以快照 parts 为底**（DB 是权威）：快照的全部 part（含 tool）与顺序原样保留，
+//   实时版只贡献 text/reasoning 的增量正文——合并后文本写到快照里该 kind 的最后一个 part；
 // - 实时文本以快照文本开头 → 保留实时版（总线领先于 DB，实时版是快照的超集）；
 // - 实时片段已含在快照正文里 → 用快照正文（DB 领先且已含该片段，不重复追加）；
 // - 其余 → 快照文本在前、实时片段在后（DB 领先于总线，主导场景）。
 //
-// 幂等：重复播种同一快照不产生变化（首播后实时文本已以快照文本开头，前缀检查自然命中保留分支）。
+// 幂等：重复播种同一快照不产生变化（合并后文本是 mergeKindText 的不动点，
+// 且结果与实时版内容一致时原样返回实时版对象 → 消费方不被惊动）。
 
 /** 取 part 数组里最后一个指定 kind 的下标（增量追加落在最后一个同 kind part 上，合并口径与之对齐） */
 function lastIndexOfKind(parts: ContextPart[], kind: "text" | "reasoning"): number {
@@ -236,32 +239,65 @@ function mergeKindText(snapText: string, liveText: string): string {
   return snapText + liveText // DB 领先于总线：快照文本在前、实时片段在后
 }
 
+/** part 内容相等（纯数据逐字段比：字段序无关，files 数组序敏感） */
+function samePart(a: ContextPart, b: ContextPart): boolean {
+  const af = a.files ?? []
+  const bf = b.files ?? []
+  return (
+    a.type === b.type &&
+    (a.text ?? "") === (b.text ?? "") &&
+    (a.tool ?? "") === (b.tool ?? "") &&
+    (a.state ?? "") === (b.state ?? "") &&
+    (a.input ?? "") === (b.input ?? "") &&
+    (a.output ?? "") === (b.output ?? "") &&
+    (a.filename ?? "") === (b.filename ?? "") &&
+    (a.truncated ?? false) === (b.truncated ?? false) &&
+    af.length === bf.length &&
+    af.every((f, i) => f === bf[i])
+  )
+}
+
+/** parts 内容相等（顺序敏感：parts 顺序本身是语义的一部分） */
+function sameParts(a: ContextPart[], b: ContextPart[]): boolean {
+  return a.length === b.length && a.every((p, i) => samePart(p, b[i]!))
+}
+
 /**
  * 播种合并：把一条快照消息与实时侧同 id 的消息合并成一条。
- * role / time 以快照侧为准（DB 才是消息的权威来源）；正文按 mergeKindText 合并。
- * 没变化时原样返回（幂等：重复播种不产新对象、不惊动消费方）。
+ *
+ * **以快照 parts 为底**（DB 是权威，快照侧的 part 一个都不许丢）：
+ * - 快照的全部 part（含 tool）与顺序原样保留——实时版整体替换时不再只剩文本；
+ * - text/reasoning：把该 kind 的合并后文本（mergeKindText 的结果，语义不变）写到
+ *   快照里该 kind 的**最后一个 part** 的位置——落点与 applyTextAppend
+ *   「追加到最后一个同 kind part」口径一致：后续实时增量接在同一处，正文不被劈成两段；
+ * - 快照没有该 kind 而实时版有时：按快照时间语义把实时版该 kind 的 part 追加到末尾
+ *   （片段路径下实时版只有增量，正文自快照时刻起算 → 落在快照 parts 之后）。
+ *
+ * role / time 以快照侧为准（DB 才是消息的权威来源）。
+ * 结果与实时版内容一致时原样返回实时版对象（幂等：重复播种不产新对象、不惊动消费方）。
  */
 export function mergeSeededMessage(snap: ContextMessage, live: ContextMessage): ContextMessage {
-  const parts = [...live.parts]
-  let changed = false
+  // 底座：快照 parts 的浅拷贝（不改入参，Svelte $state 兼容）
+  const parts: ContextPart[] = snap.parts.map((p) => ({ ...p }))
   for (const kind of ["text", "reasoning"] as const) {
     const si = lastIndexOfKind(snap.parts, kind)
-    if (si === -1) continue // 快照没有该 kind：实时版原样
-    const snapPart = snap.parts[si]!
-    const li = lastIndexOfKind(parts, kind)
-    if (li === -1) {
-      // 实时版没有该 kind：补上快照的 part（快照正文更完整）
-      parts.push({ ...snapPart })
-      changed = true
+    const li = lastIndexOfKind(live.parts, kind)
+    if (si === -1) {
+      // 快照没有该 kind：实时版有则追加到末尾（快照 parts 的顺序不受影响）
+      if (li !== -1) parts.push({ ...live.parts[li]! })
       continue
     }
-    const merged = mergeKindText(snapPart.text ?? "", parts[li]!.text ?? "")
-    if (merged !== (parts[li]!.text ?? "")) {
-      parts[li] = { ...parts[li]!, text: merged }
-      changed = true
+    if (li === -1) {
+      // 实时版没有该 kind：快照的 part 原样留在原位
+      // （旧实现把它 push 到末尾 → text→tool 变 tool→text，顺序与快照相反）
+      continue
     }
+    const snapText = snap.parts[si]!.text ?? ""
+    const merged = mergeKindText(snapText, live.parts[li]!.text ?? "")
+    if (merged !== snapText) parts[si] = { ...snap.parts[si]!, text: merged }
   }
-  if (!changed && snap.role === live.role && snap.time === live.time) return live // 无变化 → 原对象（幂等）
+  // 结果与实时版内容一致（且 role/time 相同）→ 原样返回实时版对象（幂等：不惊动消费方）
+  if (snap.role === live.role && snap.time === live.time && sameParts(parts, live.parts)) return live
   return { ...live, role: snap.role, time: snap.time, parts }
 }
 

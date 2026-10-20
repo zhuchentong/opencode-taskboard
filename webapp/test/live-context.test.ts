@@ -286,6 +286,79 @@ test("seedMessages（纯函数）：不改入参", () => {
   expect(JSON.stringify({ live, snap })).toBe(before)
 })
 
+// —— N1/N3 跟进：播种合并以快照 parts 为底（快照侧 part 不丢、顺序不与快照相反）——
+
+test("N1 播种以快照 parts 为底：工具 part 与前段正文不丢、顺序不变（实时片段合并进该 kind 的最后一个 part）", () => {
+  const snap = M("m1", [
+    { type: "text", text: "Hello" },
+    { type: "tool", tool: "bash", state: "completed", output: "ok" },
+    { type: "text", text: "done" },
+  ])
+  const live = M("m1", [{ type: "text", text: " world" }])
+  const merged = mergeSeededMessage(snap, live)
+  expect(merged.parts).toEqual([
+    { type: "text", text: "Hello" }, // 前段正文不丢
+    { type: "tool", tool: "bash", state: "completed", output: "ok" }, // 工具 part 完整保留
+    { type: "text", text: "done world" }, // 实时片段并进该 kind 的最后一个 part（文本不翻倍）
+  ])
+})
+
+test("N1 播种后实时增量接在该 kind 的最后一个 part 上（落点与 applyTextAppend 一致，正文不劈成两段）", () => {
+  const { handle, es, messages } = start()
+  es().frame({ type: "text-append", kind: "text", messageID: "m1", text: " world" })
+  handle.seed([
+    M("m1", [
+      { type: "text", text: "Hello" },
+      { type: "tool", tool: "bash", state: "completed", output: "ok" },
+      { type: "text", text: "done" },
+    ]),
+  ])
+  expect(messages.at(-1)![0]!.parts).toEqual([
+    { type: "text", text: "Hello" },
+    { type: "tool", tool: "bash", state: "completed", output: "ok" },
+    { type: "text", text: "done world" },
+  ])
+  // 后续增量仍追加到同一个 part（实时正文连续，不被拆到前段 part 里）
+  es().frame({ type: "text-append", kind: "text", messageID: "m1", text: "!" })
+  expect(messages.at(-1)![0]!.parts).toEqual([
+    { type: "text", text: "Hello" },
+    { type: "tool", tool: "bash", state: "completed", output: "ok" },
+    { type: "text", text: "done world!" },
+  ])
+})
+
+test("N3 实时版缺某 kind 时，快照的该 kind part 留在原位（不被推到末尾，顺序与快照一致）", () => {
+  const snap = M("m1", [{ type: "text", text: "A" }, { type: "tool", tool: "bash" }])
+  const live = M("m1", [{ type: "tool", tool: "bash" }])
+  const merged = mergeSeededMessage(snap, live)
+  expect(merged.parts).toEqual([
+    { type: "text", text: "A" },
+    { type: "tool", tool: "bash" },
+  ]) // 旧实现会把 text 推到末尾 → text→tool 变 tool→text
+})
+
+test("N3 快照缺某 kind 而实时版有时：按快照时间语义追加到末尾（快照 parts 顺序不变）", () => {
+  const snap = M("m1", [{ type: "text", text: "A" }, { type: "tool", tool: "bash" }])
+  const live = M("m1", [{ type: "reasoning", text: "R" }])
+  const merged = mergeSeededMessage(snap, live)
+  expect(merged.parts).toEqual([
+    { type: "text", text: "A" },
+    { type: "tool", tool: "bash" },
+    { type: "reasoning", text: "R" },
+  ]) // 快照的两 part 相对顺序不变，实时独有的 reasoning 追加在末尾
+})
+
+test("播种幂等（带工具 part 的消息）：重复播种同一快照不产生变化（也不重复回调）", () => {
+  const { handle, messages } = start()
+  const snap = [M("m1", [{ type: "text", text: "Hello" }, { type: "tool", tool: "bash" }])]
+  handle.seed(snap)
+  const afterFirst = messages.length
+  handle.seed(snap)
+  handle.seed(snap)
+  expect(messages.length).toBe(afterFirst) // 无变化 → 不惊动消费方
+  expect(messages.at(-1)![0]!.parts).toEqual([{ type: "text", text: "Hello" }, { type: "tool", tool: "bash" }])
+})
+
 // —— 断线重拉快照（规格 §4.3/§6）——
 
 test("shouldReloadSnapshot：断线（reconnecting/off）要重拉快照，实时中不拉", () => {
