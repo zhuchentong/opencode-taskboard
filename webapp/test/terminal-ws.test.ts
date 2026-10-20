@@ -6,9 +6,9 @@ import {
   terminalWsUrl,
 } from "../src/lib/terminal"
 
-// 与 sidecar 的帧协议做真实 WebSocket 往返（bun 自带 WS 服务端，浏览器行为一致）：
-// 浏览器 → sidecar：二进制帧 = 终端输入字节；文本帧 = JSON 控制消息。
-// 这里把「帧类型」钉死：输入若被当成文本帧发，sidecar 会当控制消息忽略（终端敲键盘没反应）。
+// 与看板内置终端桥的帧协议做真实 WebSocket 往返（bun 自带 WS 服务端，浏览器行为一致）：
+// 浏览器 → 桥：二进制帧 = 终端输入字节；文本帧 = JSON 控制消息。
+// 这里把「帧类型」钉死：输入若被当成文本帧发，桥会当控制消息忽略（终端敲键盘没反应）。
 
 interface Received {
   /** 二进制帧的字节数 */

@@ -1,46 +1,23 @@
 import { describe, expect, test } from "bun:test"
 import {
-  DEFAULT_ALLOWED_ORIGINS,
-  TERMINAL_TOKEN_KEY,
-  TERMINAL_URL_KEY,
-  currentOrigin,
+  WS_READY_OPEN,
+  boardToken,
   decideTerminalConn,
-  emptyTerminalConfig,
   encodeTerminalBinary,
   encodeTerminalInput,
   encodeTerminalResize,
-  isValidSidecarUrl,
-  loadTerminalConfig,
-  originNeedsAllowOrigin,
   parseTerminalControl,
-  saveTerminalConfig,
-  sidecarWsUrl,
-  terminalAvailable,
   terminalConnKey,
   terminalWsUrl,
-  boardToken,
-  type TerminalStorage,
 } from "../src/lib/terminal"
 
-/** 假页面位置（同源终端 WS 地址构造用） */
+// 终端桥已并入看板服务（方案 1）：前端**同源**直连 `/api/tasks/:id/terminal?token=…`，
+// 不再有独立的 sidecar 进程、地址与口令配置项。
+// 这里的用例只覆盖纯函数：地址构造、令牌读取、连接收敛判定、帧编解码。
+
+/** 假页面位置（同源构造用） */
 const HTTP_LOC = { protocol: "http:", host: "127.0.0.1:4370" }
 const HTTPS_LOC = { protocol: "https:", host: "board.local" }
-
-/** 假 localStorage：可模拟「读取抛错」「写入抛错」两种异常路径 */
-function fakeStorage(initial: Record<string, string> = {}): TerminalStorage & {
-  data: Record<string, string>
-} {
-  const data: Record<string, string> = { ...initial }
-  return {
-    data,
-    getItem(key: string) {
-      return key in data ? data[key] : null
-    },
-    setItem(key: string, value: string) {
-      data[key] = value
-    },
-  }
-}
 
 describe("terminalWsUrl（同源终端 WS 地址）", () => {
   test("http → ws，同源看板地址", () => {
@@ -144,133 +121,6 @@ describe("看板令牌读取", () => {
   })
 })
 
-describe("sidecarWsUrl", () => {
-  test("http → ws 且去尾斜杠", () => {
-    expect(sidecarWsUrl("http://127.0.0.1:7681", "ses_abc", "tok")).toBe(
-      "ws://127.0.0.1:7681/ws/ses_abc?token=tok",
-    )
-    expect(sidecarWsUrl("http://127.0.0.1:7681/", "ses_abc", "tok")).toBe(
-      "ws://127.0.0.1:7681/ws/ses_abc?token=tok",
-    )
-    expect(sidecarWsUrl("  http://127.0.0.1:7681  ", "ses_abc", "tok")).toBe(
-      "ws://127.0.0.1:7681/ws/ses_abc?token=tok",
-    )
-  })
-
-  test("https → wss", () => {
-    expect(sidecarWsUrl("https://sidecar.local", "ses_abc", "tok")).toBe(
-      "wss://sidecar.local/ws/ses_abc?token=tok",
-    )
-  })
-
-  test("ws / wss 原样保留", () => {
-    expect(sidecarWsUrl("ws://127.0.0.1:7681", "ses_abc", "tok")).toBe(
-      "ws://127.0.0.1:7681/ws/ses_abc?token=tok",
-    )
-    expect(sidecarWsUrl("wss://sidecar.local", "ses_abc", "tok")).toBe(
-      "wss://sidecar.local/ws/ses_abc?token=tok",
-    )
-  })
-
-  test("保留 base 的路径前缀（反向代理场景）", () => {
-    expect(sidecarWsUrl("http://127.0.0.1:7681/term/", "ses_abc", "tok")).toBe(
-      "ws://127.0.0.1:7681/term/ws/ses_abc?token=tok",
-    )
-  })
-
-  test("sessionID 与 token 都做 URL 编码", () => {
-    const url = sidecarWsUrl("http://127.0.0.1:7681", "ses a/b", "to k&x=1")
-    expect(url).toBe("ws://127.0.0.1:7681/ws/ses%20a%2Fb?token=to%20k%26x%3D1")
-    // 编码后 sidecar 侧解码回来仍是原值
-    const parsed = new URL(url)
-    expect(decodeURIComponent(parsed.pathname)).toBe("/ws/ses a/b")
-    expect(parsed.searchParams.get("token")).toBe("to k&x=1")
-  })
-
-  test("非法 base 返回空串（调用方按未配置处理）", () => {
-    expect(sidecarWsUrl("", "ses_abc", "tok")).toBe("")
-    expect(sidecarWsUrl("不是地址", "ses_abc", "tok")).toBe("")
-    expect(sidecarWsUrl("127.0.0.1:7681", "ses_abc", "tok")).toBe("")
-    expect(sidecarWsUrl("ftp://127.0.0.1", "ses_abc", "tok")).toBe("")
-  })
-
-  test("缺 sessionID 或 token 返回空串", () => {
-    expect(sidecarWsUrl("http://127.0.0.1:7681", "", "tok")).toBe("")
-    expect(sidecarWsUrl("http://127.0.0.1:7681", "ses_abc", "")).toBe("")
-  })
-})
-
-describe("终端配置读写", () => {
-  test("无 storage → 空配置", () => {
-    expect(loadTerminalConfig(null)).toEqual(emptyTerminalConfig())
-  })
-
-  test("读取已存配置并去空白", () => {
-    const s = fakeStorage({
-      [TERMINAL_URL_KEY]: "  http://127.0.0.1:7681  ",
-      [TERMINAL_TOKEN_KEY]: " s3cr3t ",
-    })
-    expect(loadTerminalConfig(s)).toEqual({ sidecarUrl: "http://127.0.0.1:7681", token: "s3cr3t" })
-  })
-
-  test("读取抛错（隐私模式）→ 空配置且不抛异常", () => {
-    const broken: TerminalStorage = {
-      getItem() {
-        throw new Error("boom")
-      },
-      setItem() {},
-    }
-    expect(loadTerminalConfig(broken)).toEqual(emptyTerminalConfig())
-  })
-
-  test("保存写入两个键并去空白", () => {
-    const s = fakeStorage()
-    saveTerminalConfig({ sidecarUrl: " http://127.0.0.1:7681 ", token: " tok " }, s)
-    expect(s.data[TERMINAL_URL_KEY]).toBe("http://127.0.0.1:7681")
-    expect(s.data[TERMINAL_TOKEN_KEY]).toBe("tok")
-  })
-
-  test("写入抛错 → 静默忽略不抛异常", () => {
-    const broken: TerminalStorage = {
-      getItem: () => null,
-      setItem() {
-        throw new Error("quota")
-      },
-    }
-    expect(() => saveTerminalConfig({ sidecarUrl: "http://x", token: "t" }, broken)).not.toThrow()
-  })
-
-  test("保存后能原样读回", () => {
-    const s = fakeStorage()
-    saveTerminalConfig({ sidecarUrl: "http://127.0.0.1:7681", token: "s3cr3t" }, s)
-    expect(loadTerminalConfig(s)).toEqual({ sidecarUrl: "http://127.0.0.1:7681", token: "s3cr3t" })
-  })
-})
-
-describe("terminalAvailable", () => {
-  const cfg = { sidecarUrl: "http://127.0.0.1:7681", token: "s3cr3t" }
-
-  test("配置齐全 + 有会话 ID → 可用", () => {
-    expect(terminalAvailable(cfg, "ses_abc")).toBe(true)
-  })
-
-  test("缺会话 ID → 不可用", () => {
-    expect(terminalAvailable(cfg, "")).toBe(false)
-    expect(terminalAvailable(cfg, undefined)).toBe(false)
-    expect(terminalAvailable(cfg, null)).toBe(false)
-  })
-
-  test("缺配置 → 不可用", () => {
-    expect(terminalAvailable({ sidecarUrl: "", token: "s3cr3t" }, "ses_abc")).toBe(false)
-    expect(terminalAvailable({ sidecarUrl: "http://127.0.0.1:7681", token: "" }, "ses_abc")).toBe(false)
-    expect(terminalAvailable(emptyTerminalConfig(), "ses_abc")).toBe(false)
-  })
-
-  test("地址非法 → 不可用", () => {
-    expect(terminalAvailable({ sidecarUrl: "不是地址", token: "s3cr3t" }, "ses_abc")).toBe(false)
-  })
-})
-
 describe("控制帧编解码", () => {
   test("解析 error 帧", () => {
     expect(parseTerminalControl('{"type":"error","message":"会话不存在：xxx"}')).toEqual({
@@ -326,41 +176,28 @@ describe("控制帧编解码", () => {
   test("二进制输入按字节截断", () => {
     expect(Array.from(encodeTerminalBinary("\u0001"))).toEqual([0x01])
   })
-})
 
-describe("isValidSidecarUrl", () => {
-  test("带 http(s):// 前缀的地址合法", () => {
-    expect(isValidSidecarUrl("http://127.0.0.1:7681")).toBe(true)
-    expect(isValidSidecarUrl("http://127.0.0.1:7681/")).toBe(true)
-    expect(isValidSidecarUrl("https://sidecar.local")).toBe(true)
-    expect(isValidSidecarUrl("ws://127.0.0.1:7681")).toBe(true)
-  })
-
-  test("缺前缀 / 空 / 非法协议 → 非法", () => {
-    expect(isValidSidecarUrl("127.0.0.1:7681")).toBe(false)
-    expect(isValidSidecarUrl("")).toBe(false)
-    expect(isValidSidecarUrl("不是地址")).toBe(false)
-    expect(isValidSidecarUrl("ftp://127.0.0.1")).toBe(false)
+  test("已连接常量 = 1（不依赖浏览器 WebSocket.OPEN）", () => {
+    expect(WS_READY_OPEN).toBe(1)
   })
 })
 
 describe("decideTerminalConn（连接判定）", () => {
-  const KEY = terminalConnKey("t1", "ses_abc", "http://127.0.0.1:7681", "tok")
+  const KEY = terminalConnKey("t1", "ses_abc", "tok")
 
   test("① 键未变（看板快照重渲染）→ hold，不重连", () => {
     expect(decideTerminalConn({ prevKey: KEY, nextKey: KEY, active: true })).toBe("hold")
   })
 
-  test("② 配置对象整体替换但键字符串相同 → hold，不重连", () => {
-    // 父组件把 config 换成值相同的新对象：键仍相同 → 不得重连
-    const next = terminalConnKey("t1", "ses_abc", " http://127.0.0.1:7681 ", "tok")
+  test("② 令牌字符串含空白（同一令牌不同写法）→ 键相同 → hold，不重连", () => {
+    // 判定函数不接收连接状态：键没变就一律 hold，
+    // 结构上杜绝了「exit/error 后被一次快照自动重连」
+    const next = terminalConnKey("t1", "ses_abc", " tok ")
     expect(next).toBe(KEY)
     expect(decideTerminalConn({ prevKey: KEY, nextKey: next, active: true })).toBe("hold")
   })
 
   test("③ exit / error 之后键未变 → hold（不自动重连）", () => {
-    // 判定函数不接收连接状态：键没变就一律 hold，
-    // 结构上杜绝了「exit/error 后被一次快照自动重连」
     expect(decideTerminalConn({ prevKey: KEY, nextKey: KEY, active: true })).toBe("hold")
   })
 
@@ -373,32 +210,28 @@ describe("decideTerminalConn（连接判定）", () => {
     expect(decideTerminalConn({ prevKey: KEY, nextKey: KEY, active: false })).toBe("disconnect")
   })
 
-  test("换任务 / 换会话 / 换配置 → connect", () => {
+  test("换任务 / 换会话 / 换令牌 → connect", () => {
     expect(
-      decideTerminalConn({
-        prevKey: KEY,
-        nextKey: terminalConnKey("t2", "ses_abc", "http://127.0.0.1:7681", "tok"),
-        active: true,
-      }),
+      decideTerminalConn({ prevKey: KEY, nextKey: terminalConnKey("t2", "ses_abc", "tok"), active: true }),
     ).toBe("connect")
     expect(
-      decideTerminalConn({
-        prevKey: KEY,
-        nextKey: terminalConnKey("t1", "ses_xyz", "http://127.0.0.1:7681", "tok"),
-        active: true,
-      }),
+      decideTerminalConn({ prevKey: KEY, nextKey: terminalConnKey("t1", "ses_xyz", "tok"), active: true }),
     ).toBe("connect")
     expect(
-      decideTerminalConn({
-        prevKey: KEY,
-        nextKey: terminalConnKey("t1", "ses_abc", "http://127.0.0.1:9999", "tok"),
-        active: true,
-      }),
+      decideTerminalConn({ prevKey: KEY, nextKey: terminalConnKey("t1", "ses_abc", "tok2"), active: true }),
     ).toBe("connect")
   })
 
   test("键为空 → hold（不连）", () => {
     expect(decideTerminalConn({ prevKey: KEY, nextKey: "", active: true })).toBe("hold")
+  })
+
+  test("两键都空且激活 → hold（不连也不断）", () => {
+    expect(decideTerminalConn({ prevKey: "", nextKey: "", active: true })).toBe("hold")
+  })
+
+  test("未激活时一律 disconnect（哪怕键为空）", () => {
+    expect(decideTerminalConn({ prevKey: "", nextKey: "", active: false })).toBe("disconnect")
   })
 
   test("C1 复现序列：连接 → exit → 一次看板快照 → 仍 hold（不自动重连）", () => {
@@ -417,35 +250,18 @@ describe("decideTerminalConn（连接判定）", () => {
 })
 
 describe("terminalConnKey", () => {
-  test("同任务同会话同配置 → 同键", () => {
-    expect(terminalConnKey("t1", "ses_abc", "http://127.0.0.1:7681", "tok")).toBe(
-      terminalConnKey("t1", "ses_abc", "http://127.0.0.1:7681", "tok"),
-    )
+  test("同任务同会话同令牌 → 同键", () => {
+    expect(terminalConnKey("t1", "ses_abc", "tok")).toBe(terminalConnKey("t1", "ses_abc", "tok"))
   })
 
-  test("换任务 / 换会话 / 换配置 → 不同键", () => {
-    const base = terminalConnKey("t1", "ses_abc", "http://127.0.0.1:7681", "tok")
-    expect(terminalConnKey("t2", "ses_abc", "http://127.0.0.1:7681", "tok")).not.toBe(base)
-    expect(terminalConnKey("t1", "ses_xyz", "http://127.0.0.1:7681", "tok")).not.toBe(base)
-    expect(terminalConnKey("t1", "ses_abc", "http://127.0.0.1:9999", "tok")).not.toBe(base)
-    expect(terminalConnKey("t1", "ses_abc", "http://127.0.0.1:7681", "tok2")).not.toBe(base)
-  })
-})
-
-describe("Origin 白名单提示", () => {
-  test("默认白名单内的 Origin 不需要 --allow-origin", () => {
-    for (const o of DEFAULT_ALLOWED_ORIGINS) {
-      expect(originNeedsAllowOrigin(o)).toBe(false)
-    }
-    expect(originNeedsAllowOrigin("")).toBe(false)
+  test("三段都去空白（同一令牌不同写法 → 同一键，不重连）", () => {
+    expect(terminalConnKey(" t1 ", " ses_abc ", " tok ")).toBe(terminalConnKey("t1", "ses_abc", "tok"))
   })
 
-  test("其它 Origin 需要 --allow-origin", () => {
-    expect(originNeedsAllowOrigin("http://127.0.0.1:4371")).toBe(true)
-    expect(originNeedsAllowOrigin("http://192.168.1.10:4370")).toBe(true)
-  })
-
-  test("bun 测试环境无 location → 空串", () => {
-    expect(currentOrigin()).toBe("")
+  test("换任务 / 换会话 / 换令牌 → 不同键", () => {
+    const base = terminalConnKey("t1", "ses_abc", "tok")
+    expect(terminalConnKey("t2", "ses_abc", "tok")).not.toBe(base)
+    expect(terminalConnKey("t1", "ses_xyz", "tok")).not.toBe(base)
+    expect(terminalConnKey("t1", "ses_abc", "tok2")).not.toBe(base)
   })
 })

@@ -5,28 +5,25 @@
   import "@xterm/xterm/css/xterm.css"
   import {
     WS_READY_OPEN,
+    boardToken,
     decideTerminalConn,
     encodeTerminalBinary,
     encodeTerminalInput,
     encodeTerminalResize,
     parseTerminalControl,
-    sidecarWsUrl,
     terminalConnKey,
-    type TerminalConfig,
+    terminalWsUrl,
   } from "$lib/terminal"
 
   let {
     taskId,
     sessionID,
-    config,
     active = false,
   }: {
-    /** 任务 ID（连接收敛键的一半） */
+    /** 任务 ID（连接收敛键的一半；同时是终端 WS 路由里的任务标识） */
     taskId: string
-    /** worker 会话 ID：sidecar 用它开 tmux 会话 board-<id> */
+    /** worker 会话 ID：看板终端桥用它开 tmux 会话 board-<id> */
     sessionID: string
-    /** sidecar 地址与共享口令 */
-    config: TerminalConfig
     /** 终端 Tab 是否处于激活态：切出即断开（tmux 保状态，重进秒级重 attach） */
     active?: boolean
   } = $props()
@@ -51,7 +48,7 @@
   /** 当前连接收敛键：键不变就不重建连接（普通变量） */
   let connKey = ""
 
-  /** 断开当前连接（不杀 tmux 会话：sidecar 侧会话仍在，重连秒级 attach） */
+  /** 断开当前连接（不杀 tmux 会话：看板侧会话仍在，重连秒级 attach） */
   function disconnect() {
     const s = sock
     sock = null
@@ -68,7 +65,7 @@
     }
   }
 
-  /** 把当前终端尺寸告知 sidecar（文本帧 JSON 控制消息） */
+  /** 把当前终端尺寸告知看板终端桥（文本帧 JSON 控制消息） */
   function sendResize() {
     const s = sock
     const t = term
@@ -96,12 +93,12 @@
     sendResize()
   }
 
-  /** 建立连接：文本帧 = JSON 控制消息；二进制帧 = 终端原始字节流 */
+  /** 建立连接：同源直连看板服务的终端 WS；文本帧 = JSON 控制消息；二进制帧 = 终端原始字节流 */
   function connect() {
-    const url = sidecarWsUrl(config.sidecarUrl, sessionID, config.token)
+    const url = terminalWsUrl(taskId, boardToken())
     if (!url) {
       status = "idle"
-      notice = { kind: "error", text: "终端地址或口令无效，无法连接（请检查「终端设置」）" }
+      notice = { kind: "error", text: "无法连接：看板地址或访问令牌不可用（终端需连接看板主实例）" }
       return
     }
     disconnect()
@@ -124,7 +121,7 @@
     s.onopen = () => {
       opened = true
       status = "connected"
-      // 连接建立后尽早发一次尺寸：sidecar 侧有早到帧缓冲，先发也不丢
+      // 连接建立后尽早发一次尺寸：桥侧有早到帧缓冲，先发也不丢
       fitToContainer()
       sendResize()
       term?.focus()
@@ -161,7 +158,7 @@
         ? { kind: "warn", text: "连接已断开（tmux 会话仍在，可点击「重连」恢复）" }
         : {
             kind: "error",
-            text: "连接失败：请确认 sidecar 已启动（默认 http://127.0.0.1:7681），且口令与 Origin 白名单匹配",
+            text: "连接失败：请确认看板服务运行中且为主实例（终端功能仅主实例装配），且访问令牌正确",
           }
     }
 
@@ -172,7 +169,7 @@
 
   /** 手动重连（error / exit / 断线后的恢复入口）：唯一能重连的路径 */
   function reconnect() {
-    connKey = terminalConnKey(taskId, sessionID, config.sidecarUrl, config.token)
+    connKey = terminalConnKey(taskId, sessionID, boardToken())
     connect()
   }
 
@@ -200,7 +197,7 @@
     fitAddon = fit
 
     // 输入：xterm 的 onData 给的是字符串 → 必须编码成字节按**二进制帧**发。
-    // 直接发字符串会变成文本帧，被 sidecar 当成控制消息忽略（终端表现为敲键盘没反应）。
+    // 直接发字符串会变成文本帧，被桥当成控制消息忽略（终端表现为敲键盘没反应）。
     t.onData((data) => {
       const s = sock
       if (!s || s.readyState !== WS_READY_OPEN) return
@@ -220,7 +217,7 @@
         /* 忽略 */
       }
     })
-    // 尺寸变化：把新尺寸告知 sidecar
+    // 尺寸变化：把新尺寸告知看板终端桥
     t.onResize(() => sendResize())
     // 容器尺寸变化（面板缩放 / Tab 显隐）→ 重新 fit
     const ro = new ResizeObserver(() => fitToContainer())
@@ -236,17 +233,17 @@
     }
   })
 
-  // 连接生命周期：按「任务 ID + 会话 ID + sidecar 地址 + 口令」收敛。
+  // 连接生命周期：按「任务 ID + 会话 ID + 看板令牌」收敛。
   // 判定逻辑在纯函数 decideTerminalConn 里（组件只调用它）：
   // - 键未变 → 一律不重连。看板快照重渲染时父组件会把 task 换成新对象，
   //   props 的 getter 随之失效 → 本 effect 必然重跑；此时键没变，必须 hold，
   //   否则 exit/error 之后会被快照自动重连（这正是 C1 的成因）。
-  // - 键变了 → 连（换任务 / 换会话 / 换配置 / 切回页签）。
+  // - 键变了 → 连（换任务 / 换会话 / 换令牌 / 切回页签）。
   // - 切出终端 Tab → 主动断开（tmux 保状态，重进秒级重 attach），键同时清空。
   // 注意：这里不用 effect 的 cleanup 断连——cleanup 会在任何依赖变化时先跑，
-  // 连带把「配置对象被整体替换但值没变」这种无关重跑也变成断连（连接被误杀）。
+  // 连带把「无关依赖变化」这种重跑也变成断连（连接被误杀）。
   $effect(() => {
-    const key = terminalConnKey(taskId, sessionID, config.sidecarUrl, config.token)
+    const key = terminalConnKey(taskId, sessionID, boardToken())
     const action = decideTerminalConn({ prevKey: connKey, nextKey: key, active })
     if (action === "disconnect") {
       connKey = ""
@@ -280,7 +277,7 @@
       type="button"
       class="rounded-md border px-2 py-0.5 text-xs hover:bg-accent"
       onclick={reconnect}
-      title="重新连接 sidecar（TUI 已退出时重连会重起一个新 TUI）"
+      title="重新连接看板终端（TUI 已退出时重连会重起一个新 TUI）"
     >
       重连
     </button>
