@@ -138,6 +138,14 @@ export function sidecarWsUrl(base: string, sessionID: string, token: string): st
 }
 
 /**
+ * sidecar 地址是否合法（能被解析成 sidecar 的 WS 地址）。
+ * 探针用的 sessionID / token 只为让拼接流程走完整，不参与实际连接。
+ */
+export function isValidSidecarUrl(url: string): boolean {
+  return sidecarWsUrl(url, "probe", "probe") !== ""
+}
+
+/**
  * 终端 Tab 是否可用：需要任务已有会话 ID（worker 已领取）+ 配置齐全且地址合法。
  * 缺配置 / 缺会话 ID / 地址非法 → false（不显示那个点开就报错的空 Tab）。
  */
@@ -145,7 +153,36 @@ export function terminalAvailable(config: TerminalConfig, sessionID: string | nu
   const sid = (sessionID ?? "").trim()
   if (!sid) return false
   if (!config.sidecarUrl.trim() || !config.token.trim()) return false
-  return sidecarWsUrl(config.sidecarUrl, sid, config.token) !== ""
+  return isValidSidecarUrl(config.sidecarUrl)
+}
+
+/** 连接状态机的动作 */
+export type TerminalConnAction = "connect" | "hold" | "disconnect"
+
+/** 连接判定的输入 */
+export interface TerminalConnInput {
+  /** 上一轮的连接键（空串 = 尚未连接，或切出页签时已被清空） */
+  prevKey: string
+  /** 本轮计算出的连接键 */
+  nextKey: string
+  /** 终端 Tab 是否处于激活态 */
+  active: boolean
+}
+
+/**
+ * 连接判定（组件只调用它，判定逻辑不留在 .svelte 里）。
+ *
+ * - `disconnect`：页签切出 → 断开（键同时清空；切回时键变化 → 会重连）
+ * - `hold`：键未变 → 不动。**键未变一律不重连**——看板快照重渲染
+ *   （父组件把 task 换成新对象，props 的 getter 失效 → effect 重跑）、
+ *   配置对象被整体替换但值没变、exit/error 之后的自动重连，全属此类。
+ *   重连的唯一入口是用户点「重连」（切出切回除外）。
+ * - `connect`：键变了 → 连（换任务 / 换会话 / 换配置 / 切回页签）
+ */
+export function decideTerminalConn(input: TerminalConnInput): TerminalConnAction {
+  if (!input.active) return "disconnect"
+  if (!input.nextKey) return "hold"
+  return input.prevKey === input.nextKey ? "hold" : "connect"
 }
 
 /**

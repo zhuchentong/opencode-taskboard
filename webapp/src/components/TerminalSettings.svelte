@@ -2,7 +2,7 @@
   import { Button } from "$lib/components/ui/button"
   import { Input } from "$lib/components/ui/input"
   import { untrack } from "svelte"
-  import { currentOrigin, originNeedsAllowOrigin, type TerminalConfig } from "$lib/terminal"
+  import { currentOrigin, isValidSidecarUrl, originNeedsAllowOrigin, type TerminalConfig } from "$lib/terminal"
 
   let {
     config,
@@ -27,8 +27,14 @@
   const origin = currentOrigin()
   /** Origin 是否需要 --allow-origin */
   const needAllowOrigin = originNeedsAllowOrigin(origin)
+  /** 地址格式是否合法（能被解析成 sidecar 的 WS 地址） */
+  const urlValid = $derived(isValidSidecarUrl(sidecarUrl))
   /** 配置是否已填写完整（决定「终端」Tab 是否会出现） */
   const filled = $derived(sidecarUrl.trim() !== "" && token.trim() !== "")
+  /** 能否保存：填写完整 **且** 地址格式合法 */
+  const canSave = $derived(filled && urlValid)
+  /** 地址填了但不合法 → 给出中文提示（空地址不算错，还没填而已） */
+  const urlInvalid = $derived(sidecarUrl.trim() !== "" && !urlValid)
 
   function save() {
     onsave({ sidecarUrl: sidecarUrl.trim(), token: token.trim() })
@@ -55,6 +61,11 @@ npm start -- --token &lt;至少 8 位的共享口令&gt;</pre>
       <span class="text-muted-foreground">sidecar 地址</span>
       <Input bind:value={sidecarUrl} placeholder="http://127.0.0.1:7681" aria-label="sidecar 地址" />
     </label>
+    {#if urlInvalid}
+      <p class="text-destructive">
+        地址需带 http(s):// 前缀，例：<span class="font-mono">http://127.0.0.1:7681</span>
+      </p>
+    {/if}
     <label class="grid gap-1">
       <span class="text-muted-foreground">共享口令（sidecar 启动参数 --token）</span>
       <Input bind:value={token} placeholder="至少 8 位" aria-label="sidecar 共享口令" type="password" />
@@ -70,9 +81,13 @@ npm start -- --token &lt;至少 8 位的共享口令&gt;</pre>
     </p>
   {/if}
 
-  {#if !filled}
+  {#if !canSave}
     <p class="text-muted-foreground">
-      填写完整后，「终端」页签才会出现在<strong>已领取且有会话</strong>的任务详情里。
+      {#if urlInvalid}
+        地址格式合法、且口令填写完整后，「终端」页签才会出现在<strong>已领取且有会话</strong>的任务详情里。
+      {:else}
+        填写完整后，「终端」页签才会出现在<strong>已领取且有会话</strong>的任务详情里。
+      {/if}
     </p>
   {/if}
 
@@ -80,6 +95,6 @@ npm start -- --token &lt;至少 8 位的共享口令&gt;</pre>
     {#if oncancel}
       <Button variant="ghost" size="sm" onclick={() => oncancel?.()}>取消</Button>
     {/if}
-    <Button size="sm" disabled={!filled} onclick={save}>保存</Button>
+    <Button size="sm" disabled={!canSave} onclick={save}>保存</Button>
   </div>
 </div>

@@ -8,6 +8,10 @@ const detail = readFileSync(new URL("../src/components/TaskDetail.svelte", impor
 
 const lane = readFileSync(new URL("../src/components/Lane.svelte", import.meta.url), "utf8")
 
+// 终端组件的连接判定：组件级 DOM 断言同样跑不了，
+// 这里以源文本断言钉住「判定外置到纯函数 + 不出现失效的合取守卫」（C1 的回归防线）。
+const terminal = readFileSync(new URL("../src/components/Terminal.svelte", import.meta.url), "utf8")
+
 describe("回归基线载体标记", () => {
   test("Card 根元素带 data-task-id（closeDetail 焦点返还的查询锚点）", () => {
     expect(card).toContain('data-task-id={task.id}')
@@ -20,5 +24,13 @@ describe("回归基线载体标记", () => {
   test("手写拖拽接线恢复（cardDrag action + 插入指示线）", () => {
     expect(card).toContain("use:cardDrag={task.id}")
     expect(lane).toContain('class="drop-line')
+  })
+  test("终端连接判定外置到纯函数 decideTerminalConn（C1 防线）", () => {
+    expect(terminal).toContain("decideTerminalConn(")
+    // 判定不得留在组件里内联
+    expect(terminal).not.toContain("key === connKey &&")
+  })
+  test("终端不再有失效的 wantConn 守卫变量（C1 防线）", () => {
+    expect(terminal).not.toContain("wantConn")
   })
 })

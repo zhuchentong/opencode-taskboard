@@ -4,10 +4,12 @@ import {
   TERMINAL_TOKEN_KEY,
   TERMINAL_URL_KEY,
   currentOrigin,
+  decideTerminalConn,
   emptyTerminalConfig,
   encodeTerminalBinary,
   encodeTerminalInput,
   encodeTerminalResize,
+  isValidSidecarUrl,
   loadTerminalConfig,
   originNeedsAllowOrigin,
   parseTerminalControl,
@@ -201,6 +203,94 @@ describe("控制帧编解码", () => {
 
   test("二进制输入按字节截断", () => {
     expect(Array.from(encodeTerminalBinary("\u0001"))).toEqual([0x01])
+  })
+})
+
+describe("isValidSidecarUrl", () => {
+  test("带 http(s):// 前缀的地址合法", () => {
+    expect(isValidSidecarUrl("http://127.0.0.1:7681")).toBe(true)
+    expect(isValidSidecarUrl("http://127.0.0.1:7681/")).toBe(true)
+    expect(isValidSidecarUrl("https://sidecar.local")).toBe(true)
+    expect(isValidSidecarUrl("ws://127.0.0.1:7681")).toBe(true)
+  })
+
+  test("缺前缀 / 空 / 非法协议 → 非法", () => {
+    expect(isValidSidecarUrl("127.0.0.1:7681")).toBe(false)
+    expect(isValidSidecarUrl("")).toBe(false)
+    expect(isValidSidecarUrl("不是地址")).toBe(false)
+    expect(isValidSidecarUrl("ftp://127.0.0.1")).toBe(false)
+  })
+})
+
+describe("decideTerminalConn（连接判定）", () => {
+  const KEY = terminalConnKey("t1", "ses_abc", "http://127.0.0.1:7681", "tok")
+
+  test("① 键未变（看板快照重渲染）→ hold，不重连", () => {
+    expect(decideTerminalConn({ prevKey: KEY, nextKey: KEY, active: true })).toBe("hold")
+  })
+
+  test("② 配置对象整体替换但键字符串相同 → hold，不重连", () => {
+    // 父组件把 config 换成值相同的新对象：键仍相同 → 不得重连
+    const next = terminalConnKey("t1", "ses_abc", " http://127.0.0.1:7681 ", "tok")
+    expect(next).toBe(KEY)
+    expect(decideTerminalConn({ prevKey: KEY, nextKey: next, active: true })).toBe("hold")
+  })
+
+  test("③ exit / error 之后键未变 → hold（不自动重连）", () => {
+    // 判定函数不接收连接状态：键没变就一律 hold，
+    // 结构上杜绝了「exit/error 后被一次快照自动重连」
+    expect(decideTerminalConn({ prevKey: KEY, nextKey: KEY, active: true })).toBe("hold")
+  })
+
+  test("④ 切出（键清空）后切回 → connect", () => {
+    // 切出时 prevKey 被清空，切回时键非空 → 键变化 → 连
+    expect(decideTerminalConn({ prevKey: "", nextKey: KEY, active: true })).toBe("connect")
+  })
+
+  test("切出页签 → disconnect（并清键）", () => {
+    expect(decideTerminalConn({ prevKey: KEY, nextKey: KEY, active: false })).toBe("disconnect")
+  })
+
+  test("换任务 / 换会话 / 换配置 → connect", () => {
+    expect(
+      decideTerminalConn({
+        prevKey: KEY,
+        nextKey: terminalConnKey("t2", "ses_abc", "http://127.0.0.1:7681", "tok"),
+        active: true,
+      }),
+    ).toBe("connect")
+    expect(
+      decideTerminalConn({
+        prevKey: KEY,
+        nextKey: terminalConnKey("t1", "ses_xyz", "http://127.0.0.1:7681", "tok"),
+        active: true,
+      }),
+    ).toBe("connect")
+    expect(
+      decideTerminalConn({
+        prevKey: KEY,
+        nextKey: terminalConnKey("t1", "ses_abc", "http://127.0.0.1:9999", "tok"),
+        active: true,
+      }),
+    ).toBe("connect")
+  })
+
+  test("键为空 → hold（不连）", () => {
+    expect(decideTerminalConn({ prevKey: KEY, nextKey: "", active: true })).toBe("hold")
+  })
+
+  test("C1 复现序列：连接 → exit → 一次看板快照 → 仍 hold（不自动重连）", () => {
+    // 复审实测：旧实现用 `key === connKey && wantConn` 做守卫，
+    // exit 之后 wantConn=false → 合取为假 → 一次看板快照就把连接重建了。
+    // 现在的判定只看键：键没变就一律 hold。
+    const afterConnect = decideTerminalConn({ prevKey: "", nextKey: KEY, active: true })
+    expect(afterConnect).toBe("connect")
+    // exit 帧到达：键不变（组件不碰 connKey）
+    const afterExit = decideTerminalConn({ prevKey: KEY, nextKey: KEY, active: true })
+    expect(afterExit).toBe("hold")
+    // 随后一次看板快照（父组件换新 task 对象 → props getter 失效 → effect 重跑）：键仍不变
+    const afterSnapshot = decideTerminalConn({ prevKey: KEY, nextKey: KEY, active: true })
+    expect(afterSnapshot).toBe("hold")
   })
 })
 

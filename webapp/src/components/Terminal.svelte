@@ -5,6 +5,7 @@
   import "@xterm/xterm/css/xterm.css"
   import {
     WS_READY_OPEN,
+    decideTerminalConn,
     encodeTerminalBinary,
     encodeTerminalInput,
     encodeTerminalResize,
@@ -49,8 +50,6 @@
   let observer: ResizeObserver | null = null
   /** 当前连接收敛键：键不变就不重建连接（普通变量） */
   let connKey = ""
-  /** 是否应当保持连接：连接结束（error / exit / 断线）后置 false，直到用户点「重连」 */
-  let wantConn = false
 
   /** 断开当前连接（不杀 tmux 会话：sidecar 侧会话仍在，重连秒级 attach） */
   function disconnect() {
@@ -102,14 +101,12 @@
     const url = sidecarWsUrl(config.sidecarUrl, sessionID, config.token)
     if (!url) {
       status = "idle"
-      wantConn = false
       notice = { kind: "error", text: "终端地址或口令无效，无法连接（请检查「终端设置」）" }
       return
     }
     disconnect()
     status = "connecting"
     notice = null
-    wantConn = true
     term?.reset()
 
     let s: WebSocket
@@ -117,7 +114,6 @@
       s = new WebSocket(url)
     } catch (e) {
       status = "closed"
-      wantConn = false
       notice = { kind: "error", text: `无法建立连接：${e instanceof Error ? e.message : String(e)}` }
       return
     }
@@ -142,7 +138,6 @@
         if (ctl.type === "error") {
           notice = { kind: "error", text: ctl.message }
           status = "closed"
-          wantConn = false
         } else if (ctl.type === "exit") {
           // TUI 已退出 ⇔ tmux 会话已随之销毁：重连 = 重起一个全新 TUI（旧滚动内容不在）
           notice = {
@@ -150,7 +145,6 @@
             text: "TUI 已退出（tmux 会话已随之销毁）。点击「重连」会重新打开一个新 TUI，旧的滚动内容不在。",
           }
           status = "closed"
-          wantConn = false
         }
         return
       }
@@ -162,7 +156,6 @@
       if (sock !== s) return // 已被重连取代的旧连接：不碰状态
       sock = null
       status = "closed"
-      wantConn = false
       if (notice) return // 已有更具体的原因（error / exit 帧），不覆盖
       notice = opened
         ? { kind: "warn", text: "连接已断开（tmux 会话仍在，可点击「重连」恢复）" }
@@ -177,9 +170,8 @@
     }
   }
 
-  /** 手动重连（error / exit / 断线后的恢复入口） */
+  /** 手动重连（error / exit / 断线后的恢复入口）：唯一能重连的路径 */
   function reconnect() {
-    wantConn = true
     connKey = terminalConnKey(taskId, sessionID, config.sidecarUrl, config.token)
     connect()
   }
@@ -245,21 +237,23 @@
   })
 
   // 连接生命周期：按「任务 ID + 会话 ID + sidecar 地址 + 口令」收敛。
-  // 键不变 → 不重建（看板快照频繁重渲染不得重建连接）；
-  // 切出终端 Tab → 主动断开（tmux 保状态，重进秒级重 attach）。
+  // 判定逻辑在纯函数 decideTerminalConn 里（组件只调用它）：
+  // - 键未变 → 一律不重连。看板快照重渲染时父组件会把 task 换成新对象，
+  //   props 的 getter 随之失效 → 本 effect 必然重跑；此时键没变，必须 hold，
+  //   否则 exit/error 之后会被快照自动重连（这正是 C1 的成因）。
+  // - 键变了 → 连（换任务 / 换会话 / 换配置 / 切回页签）。
+  // - 切出终端 Tab → 主动断开（tmux 保状态，重进秒级重 attach），键同时清空。
   // 注意：这里不用 effect 的 cleanup 断连——cleanup 会在任何依赖变化时先跑，
   // 连带把「配置对象被整体替换但值没变」这种无关重跑也变成断连（连接被误杀）。
   $effect(() => {
     const key = terminalConnKey(taskId, sessionID, config.sidecarUrl, config.token)
-    if (!active) {
-      // 切出终端 Tab：断开（tmux 保状态，重进秒级重 attach）
+    const action = decideTerminalConn({ prevKey: connKey, nextKey: key, active })
+    if (action === "disconnect") {
       connKey = ""
-      wantConn = false
       disconnect()
       return
     }
-    // 键未变且连接还在：保持现状（不重连、不重建 xterm）
-    if (key === connKey && wantConn) return
+    if (action === "hold") return
     connKey = key
     connect()
   })
