@@ -1,5 +1,12 @@
-// Worker 会话上下文读取：bun:sqlite 只读打开 opencode 自身的会话库（message/part 表），
+// Worker 会话上下文读取：bun:sqlite 只读打开 opencode 自身的会话库，
 // 分页归一化为看板「上下文」标签的数据源。
+//
+// 双 schema（2026-10-20 真机实测：当前钉死版本的守护进程只写 v2 表）：
+// - v2：session_message 单表（type=user/assistant/idle），assistant 的 parts 内联在
+//   data.content（工具名在 part.name、工具输出在 state.content 文本数组）；idle 是会话
+//   状态事件，不算消息；
+// - legacy：message/part 分表（data.role、part 表按 message_id 关联），旧版守护进程的形状。
+// 打开连接时按 sqlite_master 探测一次并缓存，session_message 表存在即走 v2。
 //
 // 设计要点（探路验证 2026-10-19，见 test/context.test.ts）：
 // - 复合游标 (time_created, id) 翻页：同毫秒多条消息不漏不重（opencode 自身的
@@ -90,7 +97,9 @@ export function normalizePart(raw: Record<string, unknown>): ContextPart | null 
   }
   if (type === "tool") {
     const state = (raw.state ?? {}) as Record<string, unknown>
-    const out: ContextPart = { type: "tool", tool: typeof raw.tool === "string" ? raw.tool : "?" }
+    // 工具名：legacy 在 tool，v2 在 name；都不在 → 问号兜底
+    const toolName = typeof raw.tool === "string" ? raw.tool : typeof raw.name === "string" ? raw.name : "?"
+    const out: ContextPart = { type: "tool", tool: toolName }
     if (typeof state.status === "string") out.state = state.status
     if (state.input !== undefined) {
       const { text, truncated } = cap(JSON.stringify(state.input), PART_INPUT_CAP)
@@ -102,6 +111,17 @@ export function normalizePart(raw: Record<string, unknown>): ContextPart | null 
       const { text, truncated } = cap(rawOut, PART_TEXT_CAP)
       out.output = text
       if (truncated) out.truncated = true
+    } else if (Array.isArray(state.content)) {
+      // v2：输出在 state.content（{type:"text",text} 数组），拼接为纯文本
+      const joined = state.content
+        .map((p) => (p && typeof p === "object" && typeof (p as Record<string, unknown>).text === "string" ? ((p as Record<string, unknown>).text as string) : ""))
+        .filter(Boolean)
+        .join("\n")
+      if (joined) {
+        const { text, truncated } = cap(joined, PART_TEXT_CAP)
+        out.output = text
+        if (truncated) out.truncated = true
+      }
     }
     return out
   }
@@ -139,6 +159,8 @@ export function createContextReader(opts: { dbPath?: string } = {}): ContextRead
   const DEFAULT_LIMIT = 50
   // 惰性连接：首次 read 才打开（无会话查询零 IO；构造期不抛错）
   let db: Database | undefined
+  /** null = 尚未探测；true = v2（session_message 内联 content）；false = legacy（message/part 分表） */
+  let schemaV2: boolean | null = null
 
   function open(): Database {
     if (db) return db
@@ -163,68 +185,148 @@ export function createContextReader(opts: { dbPath?: string } = {}): ContextRead
     }
   }
 
+  /** schema 探测：session_message 表存在即 v2，否则 legacy message/part */
+  function detectSchema(d: Database): boolean {
+    const row = d.query<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'session_message'").get()
+    return (row?.n ?? 0) > 0
+  }
+
+  /** v2 行内 parts：assistant 在 data.content（逐个 normalizePart），user 在 data.text（单文本 part）；坏数据跳过 */
+  function parseInlineParts(rawJson: string): ContextPart[] {
+    let data: Record<string, unknown>
+    try {
+      data = JSON.parse(rawJson) as Record<string, unknown>
+    } catch {
+      return []
+    }
+    if (Array.isArray(data.content)) {
+      const parts: ContextPart[] = []
+      for (const raw of data.content) {
+        if (!raw || typeof raw !== "object") continue
+        const part = normalizePart(raw as Record<string, unknown>)
+        if (part) parts.push(part)
+      }
+      return parts
+    }
+    if (typeof data.text === "string" && data.text) {
+      const { text, truncated } = cap(data.text, PART_TEXT_CAP)
+      return [{ type: "text", ...(text ? { text } : {}), ...(truncated ? { truncated } : {}) }]
+    }
+    return []
+  }
+
+  /** v2 读取：session_message 单表，复合游标与 legacy 同款（(time_created, id) 倒序，同毫秒不漏不重） */
+  async function readV2(sessionID: string, cursor: string | undefined, limit: number): Promise<ContextPage> {
+    // idle 是会话状态事件（outcome/time），不算消息
+    const total = query<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM session_message WHERE session_id = ? AND type != 'idle'",
+      sessionID,
+    )[0]!.n
+    if (total === 0) return { sessionID, total: 0, page: [], nextCursor: null, hasMore: false }
+
+    const rows = cursor
+      ? (() => {
+          const { tc, id } = decodeCursor(cursor)
+          return query<{ id: string; time_created: number; type: string; data: string }>(
+            `SELECT id, time_created, type, data FROM session_message
+               WHERE session_id = ? AND type != 'idle' AND (time_created < ? OR (time_created = ? AND id < ?))
+               ORDER BY time_created DESC, id DESC LIMIT ?`,
+            sessionID, tc, tc, id, limit,
+          )
+        })()
+      : query<{ id: string; time_created: number; type: string; data: string }>(
+          `SELECT id, time_created, type, data FROM session_message
+             WHERE session_id = ? AND type != 'idle'
+             ORDER BY time_created DESC, id DESC LIMIT ?`,
+          sessionID, limit,
+        )
+
+    const page: ContextMessage[] = rows.map((r) => ({
+      id: r.id,
+      role: r.type,
+      time: r.time_created,
+      parts: parseInlineParts(r.data),
+    }))
+    const hasMore = rows.length === limit
+    const last = rows[rows.length - 1]
+    return {
+      sessionID,
+      total,
+      page,
+      nextCursor: hasMore && last ? encodeCursor(last.time_created, last.id) : null,
+      hasMore,
+    }
+  }
+
+  /** legacy 读取：message/part 分表（旧版守护进程） */
+  async function readLegacy(sessionID: string, cursor: string | undefined, limit: number): Promise<ContextPage> {
+    const total = query<{ n: number }>("SELECT COUNT(*) AS n FROM message WHERE session_id = ?", sessionID)[0]!.n
+    if (total === 0) {
+      return { sessionID, total: 0, page: [], nextCursor: null, hasMore: false }
+    }
+
+    // 一页消息：复合游标 + (time_created, id) 倒序（索引 message_session_time_created_id_idx 正好支撑）
+    const rows = cursor
+      ? (() => {
+          const { tc, id } = decodeCursor(cursor)
+          return query<{ id: string; time_created: number; role: string }>(
+            `SELECT id, time_created, JSON_EXTRACT(data, '$.role') AS role FROM message
+               WHERE session_id = ? AND (time_created < ? OR (time_created = ? AND id < ?))
+               ORDER BY time_created DESC, id DESC LIMIT ?`,
+            sessionID, tc, tc, id, limit,
+          )
+        })()
+      : query<{ id: string; time_created: number; role: string }>(
+          `SELECT id, time_created, JSON_EXTRACT(data, '$.role') AS role FROM message
+             WHERE session_id = ? ORDER BY time_created DESC, id DESC LIMIT ?`,
+          sessionID, limit,
+        )
+
+    // 一页 parts 一次取回（索引 part_message_id_id_idx），消息内按时间序
+    const partsByMsg = new Map<string, ContextPart[]>()
+    if (rows.length) {
+      const placeholders = rows.map(() => "?").join(",")
+      const rawParts = query<{ message_id: string; data: string }>(
+        `SELECT message_id, data FROM part WHERE message_id IN (${placeholders}) ORDER BY time_created, id`,
+        ...rows.map((r) => r.id),
+      )
+      for (const rp of rawParts) {
+        let raw: Record<string, unknown>
+        try {
+          raw = JSON.parse(rp.data) as Record<string, unknown>
+        } catch {
+          continue // 坏数据跳过，不让整页失败
+        }
+        const part = normalizePart(raw)
+        if (!part) continue
+        const list = partsByMsg.get(rp.message_id) ?? []
+        list.push(part)
+        partsByMsg.set(rp.message_id, list)
+      }
+    }
+
+    const page: ContextMessage[] = rows.map((r) => ({
+      id: r.id,
+      role: typeof r.role === "string" ? r.role : "unknown",
+      time: r.time_created,
+      parts: partsByMsg.get(r.id) ?? [],
+    }))
+    const hasMore = rows.length === limit
+    const last = rows[rows.length - 1]
+    return {
+      sessionID,
+      total,
+      page,
+      nextCursor: hasMore && last ? encodeCursor(last.time_created, last.id) : null,
+      hasMore,
+    }
+  }
+
   return {
     async read({ sessionID, cursor, limit = DEFAULT_LIMIT }): Promise<ContextPage> {
-      const total = query<{ n: number }>("SELECT COUNT(*) AS n FROM message WHERE session_id = ?", sessionID)[0]!.n
-      if (total === 0) {
-        return { sessionID, total: 0, page: [], nextCursor: null, hasMore: false }
-      }
-
-      // 一页消息：复合游标 + (time_created, id) 倒序（索引 message_session_time_created_id_idx 正好支撑）
-      const rows = cursor
-        ? (() => {
-            const { tc, id } = decodeCursor(cursor)
-            return query<{ id: string; time_created: number; role: string }>(
-              `SELECT id, time_created, JSON_EXTRACT(data, '$.role') AS role FROM message
-                 WHERE session_id = ? AND (time_created < ? OR (time_created = ? AND id < ?))
-                 ORDER BY time_created DESC, id DESC LIMIT ?`,
-              sessionID, tc, tc, id, limit,
-            )
-          })()
-        : query<{ id: string; time_created: number; role: string }>(
-            `SELECT id, time_created, JSON_EXTRACT(data, '$.role') AS role FROM message
-               WHERE session_id = ? ORDER BY time_created DESC, id DESC LIMIT ?`,
-            sessionID, limit,
-          )
-
-      // 一页 parts 一次取回（索引 part_message_id_id_idx），消息内按时间序
-      let partsByMsg = new Map<string, ContextPart[]>()
-      if (rows.length) {
-        const placeholders = rows.map(() => "?").join(",")
-        const rawParts = query<{ message_id: string; data: string }>(
-          `SELECT message_id, data FROM part WHERE message_id IN (${placeholders}) ORDER BY time_created, id`,
-          ...rows.map((r) => r.id),
-        )
-        for (const rp of rawParts) {
-          let raw: Record<string, unknown>
-          try {
-            raw = JSON.parse(rp.data) as Record<string, unknown>
-          } catch {
-            continue // 坏数据跳过，不让整页失败
-          }
-          const part = normalizePart(raw)
-          if (!part) continue
-          const list = partsByMsg.get(rp.message_id) ?? []
-          list.push(part)
-          partsByMsg.set(rp.message_id, list)
-        }
-      }
-
-      const page: ContextMessage[] = rows.map((r) => ({
-        id: r.id,
-        role: typeof r.role === "string" ? r.role : "unknown",
-        time: r.time_created,
-        parts: partsByMsg.get(r.id) ?? [],
-      }))
-      const hasMore = rows.length === limit
-      const last = rows[rows.length - 1]
-      return {
-        sessionID,
-        total,
-        page,
-        nextCursor: hasMore && last ? encodeCursor(last.time_created, last.id) : null,
-        hasMore,
-      }
+      // schema 探测一次并缓存（惰性连接保证无会话查询零 IO 不变）
+      if (schemaV2 === null) schemaV2 = detectSchema(open())
+      return schemaV2 ? readV2(sessionID, cursor, limit) : readLegacy(sessionID, cursor, limit)
     },
     close() {
       db?.close()

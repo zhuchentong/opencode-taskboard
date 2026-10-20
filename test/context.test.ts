@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createContextReader, type ContextPage } from "../src/context"
+import { createContextReader, normalizePart, type ContextPage } from "../src/context"
 import { createStore, memoryBackend } from "../src/store"
 import { createServer, type ServerHandle } from "../src/server"
 
@@ -270,5 +270,69 @@ describe("GET /api/tasks/:id/context", () => {
     const r = await fetch(`${base}/api/tasks/${t.id}/context`)
     const body = (await r.json()) as ContextPage
     expect(body.sessionID).toBeNull()
+  })
+})
+
+// ---------- v2 schema（session_message 内联 content；2026-10-20 真机实测形状）----------
+
+function makeDbV2(): { db: Database; path: string } {
+  const dir = mkdtempSync(join(tmpdir(), "taskboard-ctx-v2-"))
+  tmpDirs.push(dir)
+  const path = join(dir, "opencode.db")
+  const db = new Database(path)
+  // 只建 v2 表：reader 若误查 legacy 表（message/part）将直接抛错，用例因此具备区分度
+  db.run(`CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  return { db, path }
+}
+
+function seedV2(db: Database, id: string, sid: string, tc: number, type: string, data: unknown): void {
+  db.run("INSERT INTO session_message VALUES (?, ?, ?, ?, ?, ?, ?)", [id, sid, type, tc, tc, tc, JSON.stringify(data)])
+}
+
+describe("createContextReader（v2 schema）", () => {
+  test("assistant 内联 content 归一化；user 文本；idle 事件排除", async () => {
+    const { db, path } = makeDbV2()
+    seedV2(db, "u1", "ses_v2", 1000, "user", { time: { created: 1000 }, text: "任务指令" })
+    seedV2(db, "a1", "ses_v2", 2000, "assistant", {
+      time: { created: 2000 },
+      content: [
+        { type: "reasoning", text: "先想一下" },
+        { type: "text", text: "结论如下" },
+        { type: "tool", id: "t1", name: "shell", executed: false, state: { status: "completed", input: { code: "ls" }, content: [{ type: "text", text: "a.ts" }, { type: "text", text: "b.ts" }] } },
+      ],
+    })
+    seedV2(db, "i1", "ses_v2", 3000, "idle", { outcome: "success", time: 3000 })
+    const reader = createContextReader({ dbPath: persist(path) })
+    const page = await reader.read({ sessionID: "ses_v2" })
+    // idle 是会话状态事件，不是消息
+    expect(page.total).toBe(2)
+    expect(page.page.map((m) => m.id)).toEqual(["a1", "u1"]) // 最新在前
+    expect(page.page[1]!.parts).toEqual([{ type: "text", text: "任务指令" }])
+    const parts = page.page[0]!.parts
+    expect(parts[0]).toEqual({ type: "reasoning", text: "先想一下" })
+    expect(parts[1]).toEqual({ type: "text", text: "结论如下" })
+    // v2 工具形状：名字在 name，输出在 state.content 文本数组
+    expect(parts[2]).toEqual({ type: "tool", tool: "shell", state: "completed", input: '{"code":"ls"}', output: "a.ts\nb.ts" })
+  })
+
+  test("游标翻页：同构复合游标不漏不重", async () => {
+    const { db, path } = makeDbV2()
+    for (let i = 0; i < 3; i++) seedV2(db, `m${i}`, "ses_v2", 1000 + i, "assistant", { time: { created: 1000 + i }, content: [{ type: "text", text: `第${i}条` }] })
+    const reader = createContextReader({ dbPath: persist(path) })
+    const p1 = await reader.read({ sessionID: "ses_v2", limit: 2 })
+    expect(p1.page.map((m) => m.id)).toEqual(["m2", "m1"])
+    expect(p1.hasMore).toBe(true)
+    const p2 = await reader.read({ sessionID: "ses_v2", limit: 2, cursor: p1.nextCursor! })
+    expect(p2.page.map((m) => m.id)).toEqual(["m0"])
+    expect(p2.hasMore).toBe(false)
+    expect(p2.nextCursor).toBeNull()
+  })
+
+  test("normalizePart 兼容 v2 tool 形状（name 字段 + state.content 文本数组）", () => {
+    expect(
+      normalizePart({ type: "tool", name: "read", state: { status: "completed", input: { path: "x.ts" }, content: [{ type: "text", text: "行1" }, { type: "text", text: "行2" }] } }),
+    ).toEqual({ type: "tool", tool: "read", state: "completed", input: '{"path":"x.ts"}', output: "行1\n行2" })
+    // 缺 name 也缺 tool → 问号兜底
+    expect(normalizePart({ type: "tool", state: {} })).toEqual({ type: "tool", tool: "?" })
   })
 })
