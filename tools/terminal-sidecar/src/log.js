@@ -22,9 +22,11 @@ function formatValue(value) {
  * @param {string[]} [options.redact] 需要脱敏的机密值（token / 密码）
  * @param {(line: string) => void} [options.sink] 输出目标
  * @param {string} [options.prefix] 行前缀
+ * @param {boolean} [options.debug] 是否输出 debug 级日志
  */
-export function createLogger({ redact = [], sink, prefix = "[sidecar]" } = {}) {
-  const secrets = redact.filter((s) => typeof s === "string" && s.length > 0)
+export function createLogger({ redact = [], sink, prefix = "[sidecar]", debug: debugEnabled = false } = {}) {
+  // 只对长度 ≥ 8 的机密做子串替换：太短的密钥会把整行日志都替换掉，反而看不清
+  const secrets = redact.filter((s) => typeof s === "string" && s.length >= 8)
   const write = sink ?? ((line) => console.log(line))
 
   /** 脱敏：把机密值替换成 *** */
@@ -45,6 +47,11 @@ export function createLogger({ redact = [], sink, prefix = "[sidecar]" } = {}) {
     info: (...args) => emit("信息", args),
     warn: (...args) => emit("警告", args),
     error: (...args) => emit("错误", args),
+    /** debug 级：默认静默，由 TERMINAL_SIDECAR_DEBUG=1 打开 */
+    debug: (...args) => {
+      if (!debugEnabled) return
+      emit("调试", args)
+    },
     scrub,
   }
 }

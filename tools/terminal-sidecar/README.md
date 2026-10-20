@@ -31,7 +31,7 @@ terminal-sidecar（独立 Node 进程，tools/terminal-sidecar/）
 | tmux 承载 | 每个 sessionID 一个 tmux 会话 `board-<sessionID>`，attach 语义（不存在才创建），刷新/重连不丢 TUI |
 | 空闲回收 | 某 session 的客户端归零并持续超过 `--idle-timeout` → `tmux kill-session` |
 | 显式关闭 | `POST /close/<sessionID>`（同样校验 token）→ 立即 kill 会话 |
-| 死面板自愈 | TUI 退出（daemon 重启等）后 tmux 留死面板（remain-on-exit），重连时识别并重建 |
+| 退出即消失 | **不设 remain-on-exit**：TUI 进程退出 → tmux 会话随之消失 → attach 客户端退出 → 浏览器收到 `{"type":"exit"}`（不会挂在死面板上冻屏）；重连时会话不存在就新建 |
 
 ## 2. 环境要求
 
@@ -64,7 +64,7 @@ npm start -- --token s3cr3t --port 7681 --idle-timeout 30
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `--token <口令>` | **必填** | 浏览器与 sidecar 之间的静态共享口令 |
+| `--token <口令>` | **必填** | 浏览器与 sidecar 之间的静态共享口令，**至少 8 个字符** |
 | `--port <端口>` | `7681` | 只绑 `127.0.0.1`（不对外暴露） |
 | `--daemon <地址>` | 自动发现 | 覆盖 daemon 地址（如 `http://127.0.0.1:49898`）；**密码仍取自 service.json** |
 | `--service-file <路径>` | `~/.local/state/opencode/service.json` | 覆盖服务注册文件路径 |
@@ -73,6 +73,12 @@ npm start -- --token s3cr3t --port 7681 --idle-timeout 30
 | `-h, --help` | — | 帮助 |
 
 > `--daemon` 只改地址不改凭据：daemon 的 Basic 认证密码只能从服务注册文件取。daemon 端口变更后**需要重启 sidecar**（自动发现只在启动时读一次）。
+
+### 环境变量
+
+| 变量 | 作用 |
+| --- | --- |
+| `TERMINAL_SIDECAR_DEBUG=1` | 打开 debug 级日志（含端口占用等原始错误堆栈、未知控制帧等细节） |
 
 ## 4. HTTP 接口
 
@@ -142,6 +148,8 @@ sidecar 侧**不需要**看板做任何改动，也不参与看板的鉴权体�
 6. 断开所有客户端并等待 `--idle-timeout` → `tmux ls` 里 `board-*` 会话消失
 7. `POST /close/<sessionID>` → 会话立即消失，网页端显示「已退出」
 8. 会话不存在时用浏览器连接 → 应显示「会话不存在：<id>」，且 `tmux ls` **不出现**新会话（绝不 exec）
+9. TUI 进程退出（例如 daemon 重启）→ 网页端应收到 `{"type":"exit"}` 并提示「终端已退出」，
+   `tmux ls` 里 `board-*` 会话随之消失（**不设 remain-on-exit**，避免 attach 客户端挂在死面板上冻屏）
 
 ## 8. 故障排查
 
@@ -149,22 +157,27 @@ sidecar 侧**不需要**看板做任何改动，也不参与看板的鉴权体�
 | --- | --- |
 | 启动报「未找到 opencode 服务注册文件」 | opencode 服务没起，或用 `--service-file` 指定正确路径 |
 | 启动报「opencode 服务注册文件解析失败」 | service.json 是坏 JSON（多为服务正在重启）；稍后重试 |
+| 启动报「端口 7681 已被占用，请用 --port 换一个端口」 | 端口被别的进程占了；换端口或先停掉占用进程（原始错误见 `TERMINAL_SIDECAR_DEBUG=1`） |
+| 启动报「--token 至少需要 8 个字符」 | 静态口令太短，换一个更长的 |
 | 浏览器连上立刻断开，控制台 401 | token 与 `--token` 不一致 |
 | 浏览器连上立刻断开，控制台 403 | 看板 origin 不在白名单：看板若跑在别的端口，用 `--allow-origin` 追加 |
 | 终端里报认证失败 | daemon 凭据已过期：重启 sidecar 重新读 service.json |
-| 终端里报「未检测到 tmux」 | 没装 tmux，或 tmux 不在 PATH |
+| 终端里报「未检测到 tmux」 | 没装 tmux，或 tmux 不在 PATH；装上后最多 30 秒自动恢复，无需重启 sidecar |
 | TUI 起来后一片空白/乱码 | 终端颜色能力不足：确认 xterm 主题是 256color，sidecar 固定 `TERM=tmux-256color` |
 | 多个标签页同时打开 | 共享同一个 TUI，输入会交错、尺寸取最小客户端（已知取舍） |
 
 ## 9. 已知取舍与安全说明
 
-- **静态共享 token**：保密性弱，localhost 威胁模型下可接受。
+- **静态共享 token**：保密性弱，localhost 威胁模型下可接受；口令至少 8 个字符。
 - **多标签 attach**：多个浏览器标签 attach 同一 tmux 会话 → 共享 TUI、输入交错、尺寸取最小客户端。
 - **daemon 端口变更需重启 sidecar**：自动发现只在启动时读一次 service.json。
+- **TUI 退出即会话消失**：不设 `remain-on-exit` —— 好处是 attach 客户端能收到退出事件（浏览器不冻屏），
+  代价是 TUI 退出后**不保留滚动内容**，重连会重新起一个 TUI。
 - **密码传递**：daemon 密码**不会**出现在命令行参数与日志里；它通过 tmux 会话环境变量
   `OPENCODE_SERVER_PASSWORD` 传给 TUI（opencode 客户端在 `--server` 模式下只从该环境变量读 Basic 认证密码）。
   同机同用户可以用 `tmux show-environment -t board-<id>` 看到它，属可接受范围（同用户本来就能读 service.json）。
-- **日志脱敏**：日志器会把已知的 token / 密码替换成 `***`；拒接日志只记原因（`token 不匹配`、`Origin 不在白名单内`），不记凭据。
+- **日志脱敏**：日志器把长度 ≥ 8 的机密（token / 密码）替换成 `***`；太短的串不替换（否则整行日志都会变成 `***`）。
+  拒接日志只记原因（`token 不匹配`、`Origin 不在白名单内`），不记凭据。
 - **不做通用 shell**：sidecar 只允许打开 opencode session，命令固定为
   `opencode --server <daemonURL> --session <sessionID>`，且用**参数数组**执行、不经 shell。
 
@@ -184,6 +197,7 @@ tools/terminal-sidecar/
 │   ├── protocol.js      # WS 帧协议常量与解析
 │   ├── server.js        # HTTP + WS 服务（createSidecar，所有外部依赖可注入）
 │   ├── pty.js           # node-pty 惰性加载
+│   ├── errors.js        # 运行期错误（中文提示 + cause 放原始错误）
 │   └── log.js           # 带脱敏的日志器
 └── test/                # node --test 单测（外部依赖全部用假实现）
     ├── helpers.mjs      # 假 pty / 假时钟 / 假 tmux 命令

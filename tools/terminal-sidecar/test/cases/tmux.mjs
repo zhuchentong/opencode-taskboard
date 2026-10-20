@@ -1,8 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import { TMUX_SESSION_PREFIX, TmuxManager, sessionName } from "../../src/tmux.js"
-import { createFakeRunCmd } from "../helpers.mjs"
+import { TMUX_PROBE_FAILURE_TTL_MS, TMUX_SESSION_PREFIX, TmuxManager, sessionName } from "../../src/tmux.js"
+import { createFakeClock, createFakeRunCmd } from "../helpers.mjs"
 
 test("sessionName：会话名带 board- 前缀", () => {
   assert.equal(sessionName("ses_abc"), `${TMUX_SESSION_PREFIX}ses_abc`)
@@ -19,15 +19,22 @@ test("TmuxManager：has-session 依据退出码判定", async () => {
   assert.equal(await tmux2.hasSession("board_x"), false)
 })
 
-test("TmuxManager：isPaneDead 识别 remain-on-exit 留下的死面板", async () => {
-  const alive = new TmuxManager({ runCmd: createFakeRunCmd({ "list-panes": { stdout: "0\n" } }) })
-  assert.equal(await alive.isPaneDead("board_x"), false)
-
-  const dead = new TmuxManager({ runCmd: createFakeRunCmd({ "list-panes": { stdout: "1\n" } }) })
-  assert.equal(await dead.isPaneDead("board_x"), true)
-
-  const gone = new TmuxManager({ runCmd: createFakeRunCmd({ "list-panes": { code: 1, stdout: "" } }) })
-  assert.equal(await gone.isPaneDead("board_x"), false)
+test("TmuxManager：不设 remain-on-exit（TUI 退出即会话消失，避免 attach 客户端冻屏）", async () => {
+  const runCmd = createFakeRunCmd()
+  const tmux = new TmuxManager({ runCmd })
+  await tmux.createSession({
+    name: "board_ses_abc",
+    cwd: "/tmp/work",
+    command: "opencode",
+    args: ["--server", "http://127.0.0.1:49898", "--session", "ses_abc"],
+  })
+  const optionCalls = runCmd.findCalls("set-option")
+  assert.ok(
+    !optionCalls.some((call) => call.args.includes("remain-on-exit")),
+    "不应再设置 remain-on-exit",
+  )
+  // 死面板判定接口已下线
+  assert.equal(tmux.isPaneDead, undefined)
 })
 
 test("TmuxManager：createSession 用参数数组执行命令，不经 shell", async () => {
@@ -70,16 +77,8 @@ test("TmuxManager：createSession 用参数数组执行命令，不经 shell", a
   assert.ok(create.args.includes("opencode"))
   assert.ok(!create.args.some((arg) => String(arg).includes("&&")))
 
-  // 面板死亡后保留 + 终端类型
+  // 只设终端类型，不设 remain-on-exit
   assert.deepEqual(runCmd.findCalls("set-option")[0].args, [
-    "set-option",
-    "-w",
-    "-t",
-    "board_ses_abc",
-    "remain-on-exit",
-    "on",
-  ])
-  assert.deepEqual(runCmd.findCalls("set-option")[1].args, [
     "set-option",
     "-t",
     "board_ses_abc",
@@ -126,4 +125,29 @@ test("TmuxManager：available 依据 tmux -V 判定", async () => {
   assert.equal(await ok.available(), true)
   const missing = new TmuxManager({ runCmd: createFakeRunCmd({ "-V": { code: 127 } }) })
   assert.equal(await missing.available(), false)
+})
+
+test("TmuxManager：探测成功永久缓存，不再重复执行 tmux -V", async () => {
+  const runCmd = createFakeRunCmd({ "-V": { code: 0 } })
+  const tmux = new TmuxManager({ runCmd })
+  assert.equal(await tmux.available(), true)
+  assert.equal(await tmux.available(), true)
+  assert.equal(runCmd.findCalls("-V").length, 1)
+})
+
+test("TmuxManager：探测失败只在短 TTL 内缓存，装上 tmux 后自动恢复", async () => {
+  let installed = false
+  const clock = createFakeClock()
+  const runCmd = createFakeRunCmd({ "-V": () => ({ code: installed ? 0 : 127 }) })
+  const tmux = new TmuxManager({ runCmd, clock })
+
+  assert.equal(await tmux.available(), false)
+  // TTL 内不重复探测
+  assert.equal(await tmux.available(), false)
+  assert.equal(runCmd.findCalls("-V").length, 1)
+
+  // 装上 tmux 后，超过 TTL 再探测即可恢复（无需重启 sidecar）
+  installed = true
+  clock.advance(TMUX_PROBE_FAILURE_TTL_MS + 1)
+  assert.equal(await tmux.available(), true)
 })

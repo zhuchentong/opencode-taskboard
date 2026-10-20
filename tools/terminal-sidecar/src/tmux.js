@@ -10,6 +10,8 @@
 
 import { execFile } from "node:child_process"
 
+import { systemClock } from "./idle.js"
+
 /** tmux 会话名前缀 */
 export const TMUX_SESSION_PREFIX = "board-"
 
@@ -19,6 +21,9 @@ export const TMUX_TERM = "tmux-256color"
 /** 默认终端尺寸（浏览器连上后会用 resize 消息纠正） */
 export const DEFAULT_COLS = 120
 export const DEFAULT_ROWS = 30
+
+/** tmux 探测失败的缓存时长：装上 tmux 后无需重启 sidecar */
+export const TMUX_PROBE_FAILURE_TTL_MS = 30_000
 
 /** 会话名 → tmux 会话名 */
 export function sessionName(sessionID) {
@@ -53,41 +58,37 @@ export class TmuxManager {
    * @param {Function} [options.runCmd] 外部命令执行器（注入点）
    * @param {Function} [options.spawnPty] pty 启动器（注入点）
    * @param {object} [options.logger] 日志器
+   * @param {object} [options.clock] 时间源（注入点）
    */
-  constructor({ runCmd = defaultRunCmd, spawnPty, logger } = {}) {
+  constructor({ runCmd = defaultRunCmd, spawnPty, logger, clock = systemClock } = {}) {
     this.runCmd = runCmd
     this.spawnPty = spawnPty
     this.logger = logger
+    this.clock = clock
     this._available = undefined
   }
 
-  /** tmux 是否可用（结果缓存） */
+  /**
+   * tmux 是否可用。
+   * 成功结果永久缓存；失败只缓存一小会儿（TMUX_PROBE_FAILURE_TTL_MS），
+   * 这样「先启动 sidecar、后装 tmux」不用重启 sidecar。
+   */
   async available() {
-    if (this._available === undefined) {
-      const result = await this.runCmd("tmux", ["-V"])
-      this._available = result.code === 0
+    if (this._available?.value === true) return true
+    const now = this.clock?.now?.() ?? Date.now()
+    if (this._available && now - this._available.at < TMUX_PROBE_FAILURE_TTL_MS) {
+      return this._available.value
     }
-    return this._available
+    const result = await this.runCmd("tmux", ["-V"])
+    const value = result.code === 0
+    this._available = { value, at: now }
+    return value
   }
 
   /** 会话是否存在 */
   async hasSession(name) {
     const result = await this.runCmd("tmux", ["has-session", "-t", name])
     return result.code === 0
-  }
-
-  /**
-   * 会话里的 pane 是否已死（TUI 退出后 remain-on-exit 留下的尸体）。
-   * 会话不存在时返回 false。
-   */
-  async isPaneDead(name) {
-    const result = await this.runCmd("tmux", ["list-panes", "-t", name, "-F", "#{pane_dead}"])
-    if (result.code !== 0) return false
-    return result.stdout
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0)
-      .some((line) => line === "1")
   }
 
   /**
@@ -129,8 +130,8 @@ export class TmuxManager {
       throw new Error(`创建 tmux 会话失败：${name}（${(result.stderr || result.stdout || "").trim() || "未知错误"}）`)
     }
 
-    // TUI 退出后留死 pane，重连时可识别并重建
-    await this.runCmd("tmux", ["set-option", "-w", "-t", name, "remain-on-exit", "on"])
+    // TUI 退出即会话消失（不设 remain-on-exit）：
+    // 否则 attach 客户端会挂在死面板上，浏览器收不到退出通知（冻屏）
     // 面板默认终端类型（与计划一致：tmux-256color）
     await this.runCmd("tmux", ["set-option", "-t", name, "default-terminal", TMUX_TERM])
     return { created: true }

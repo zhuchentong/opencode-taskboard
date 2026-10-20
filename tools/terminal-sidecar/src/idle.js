@@ -75,6 +75,12 @@ export class IdleReaper {
     this._clearTimer(sessionID)
     const handle = this.clock.setTimeout(() => {
       this.timers.delete(sessionID)
+      // 竞态：到期那一刻可能刚好有客户端接进来 → 本轮作废并重排
+      if (this.clientCount(sessionID) > 0) {
+        this.logger?.debug?.(`会话 ${sessionID} 在空闲到期瞬间有客户端接入，延后回收`)
+        this._startTimer(sessionID)
+        return
+      }
       this.logger?.info?.(`会话空闲超时，回收 tmux 会话：${sessionID}`)
       Promise.resolve(this.onExpire?.(sessionID)).catch((err) => {
         this.logger?.error?.(`回收 tmux 会话失败：${sessionID}（${err?.message ?? "未知错误"}）`)

@@ -59,6 +59,8 @@ export async function verifySession({
     let directory
     try {
       const body = await response.json()
+      // location.directory 是**会话自身的工作目录**（实测与 project canonical 一致），
+      // 是 TUI 进程 cwd 的权威来源；拿不到就回落用户 home，不报错。
       directory = body?.data?.location?.directory ?? body?.location?.directory
     } catch {
       // 响应体不是 JSON 也不影响结论：会话存在即可继续

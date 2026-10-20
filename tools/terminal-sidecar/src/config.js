@@ -14,6 +14,8 @@ export const DEFAULT_PORT = 7681
 export const DEFAULT_IDLE_TIMEOUT_MINUTES = 30
 /** 看板默认 origin（127.0.0.1 与 localhost 是同一台机器的两种写法，都放行） */
 export const DEFAULT_ALLOW_ORIGINS = ["http://127.0.0.1:4370", "http://localhost:4370"]
+/** 静态共享口令的最小长度：太短的口令容易被猜中 */
+export const MIN_TOKEN_LENGTH = 8
 
 /** 参数/配置类错误：面向用户的中文提示 */
 export class ConfigError extends Error {
@@ -97,6 +99,9 @@ export function parseArgs(argv = []) {
 
   if (!result.help) {
     if (!result.token) throw new ConfigError("缺少必填参数 --token（浏览器与 sidecar 之间的静态共享口令）")
+    if (result.token.length < MIN_TOKEN_LENGTH) {
+      throw new ConfigError(`--token 至少需要 ${MIN_TOKEN_LENGTH} 个字符（口令太短容易被猜中）`)
+    }
     if (result.daemon !== undefined) result.daemon = normalizeDaemonUrl(result.daemon)
   }
 

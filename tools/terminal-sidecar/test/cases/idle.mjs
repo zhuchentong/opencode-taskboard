@@ -78,3 +78,21 @@ test("IdleReaper：dispose 清掉所有定时器", () => {
   clock.advance(5000)
   assert.deepEqual(expired, [])
 })
+
+test("IdleReaper：到期瞬间有客户端接入 → 本轮作废并重排，不误杀", () => {
+  const clock = createFakeClock()
+  const expired = []
+  const reaper = new IdleReaper({ timeoutMs: 1000, clock, onExpire: (id) => expired.push(id) })
+  reaper.attach("ses_a")
+  reaper.detach("ses_a")
+
+  // 模拟竞态：定时器到期的同一瞬间有客户端接进来（绕过 attach 直接改计数）
+  reaper.clients.set("ses_a", 1)
+  clock.advance(1000)
+  assert.deepEqual(expired, [])
+
+  // 客户端又走了 → 重新计时，到期后正常回收
+  reaper.clients.set("ses_a", 0)
+  clock.advance(1000)
+  assert.deepEqual(expired, ["ses_a"])
+})

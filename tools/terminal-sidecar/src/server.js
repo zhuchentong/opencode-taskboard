@@ -22,6 +22,7 @@ import { IdleReaper, systemClock } from "./idle.js"
 import { CONTROL, encodeControl, parseControl, isValidSize } from "./protocol.js"
 import { createLogger } from "./log.js"
 import { defaultSpawnPty } from "./pty.js"
+import { SidecarError } from "./errors.js"
 
 const STATUS_TEXT = {
   400: "Bad Request",
@@ -91,7 +92,7 @@ export function createSidecar({
 } = {}) {
   const log = logger ?? createLogger({ redact: [config.token, config.daemonPassword].filter(Boolean) })
 
-  const tmux = new TmuxManager({ runCmd, spawnPty, logger: log })
+  const tmux = new TmuxManager({ runCmd, spawnPty, logger: log, clock })
   const idle = new IdleReaper({
     timeoutMs: config.idleTimeoutMs,
     clock,
@@ -129,16 +130,16 @@ export function createSidecar({
     return env
   }
 
-  /** 确保 tmux 会话可用（不存在则创建；死 pane 则重建） */
+  /**
+   * 确保 tmux 会话可用。
+   * 生命周期模型：**不设 remain-on-exit** —— TUI 进程退出 → tmux 会话随之消失 →
+   * attach 客户端退出 → onExit → 浏览器收到 {"type":"exit"}（不会出现挂死面板的冻屏）。
+   * 因此这里只需：会话存在就直接 attach（刷新/重连不丢 TUI），不存在才新建。
+   */
   async function ensureSession(sessionID, cwd) {
     const name = sessionName(sessionID)
     if (await tmux.hasSession(name)) {
-      if (await tmux.isPaneDead(name)) {
-        log.info(`检测到已死的 tmux 面板，重建会话：${name}`)
-        await tmux.killSession(name)
-      } else {
-        return { name, created: false }
-      }
+      return { name, created: false }
     }
     const { command, args } = tuiCommand(sessionID)
     await tmux.createSession({
@@ -260,6 +261,52 @@ export function createSidecar({
       }
     }
 
+    let pty
+    // 早到的输入/resize 帧先缓冲：pty 还没 attach 好时不能丢
+    const pending = []
+    let ptyReady = false
+
+    /** 处理一帧浏览器消息（二进制=终端输入，文本=JSON 控制消息） */
+    const handleMessage = (data, isBinary) => {
+      if (isBinary) {
+        // 终端输入：原样写进 pty（Buffer 直传，避免非 UTF-8 字节被换成 U+FFFD）
+        try {
+          pty?.write(data)
+        } catch (err) {
+          log.warn(`写入终端失败：${err?.message ?? "未知错误"}`)
+        }
+        return
+      }
+      const control = parseControl(data)
+      if (!control) {
+        log.debug("忽略无法解析的文本控制帧")
+        return
+      }
+      if (control.type === CONTROL.RESIZE) {
+        if (!isValidSize(control.cols, control.rows)) {
+          log.debug(`忽略非法尺寸控制帧：${control.cols}x${control.rows}`)
+          return
+        }
+        try {
+          pty?.resize(control.cols, control.rows)
+        } catch (err) {
+          log.warn(`调整终端尺寸失败：${err?.message ?? "未知错误"}`)
+        }
+        return
+      }
+      // 未知类型：忽略即可，不回错误（避免协议演进时的噪声）
+      log.debug(`忽略未知控制消息类型：${control.type}`)
+    }
+
+    // 先注册监听再干活：pty attach 之前到达的帧进 pending，attach 成功后按序补发
+    ws.on("message", (data, isBinary) => {
+      if (!ptyReady) {
+        pending.push([data, isBinary])
+        return
+      }
+      handleMessage(data, isBinary)
+    })
+
     // 1) 存在性校验：先于 exec（会话不存在绝不启动 opencode）
     const check = await verifySession({
       daemonUrl: config.daemonUrl,
@@ -295,7 +342,6 @@ export function createSidecar({
 
     // 4) 接管连接：接入空闲计时 + 接线
     idle.attach(sessionID)
-    let pty
     let cleaned = false
     const cleanup = () => {
       if (cleaned) return
@@ -354,26 +400,10 @@ export function createSidecar({
       }
     })
 
-    ws.on("message", (data, isBinary) => {
-      if (isBinary) {
-        // 终端输入：原样写进 pty
-        try {
-          pty?.write(Buffer.isBuffer(data) ? data.toString("utf8") : String(data))
-        } catch (err) {
-          log.warn(`写入终端失败：${err?.message ?? "未知错误"}`)
-        }
-        return
-      }
-      const control = parseControl(data)
-      if (!control) return
-      if (control.type === CONTROL.RESIZE && isValidSize(control.cols, control.rows)) {
-        try {
-          pty?.resize(control.cols, control.rows)
-        } catch (err) {
-          log.warn(`调整终端尺寸失败：${err?.message ?? "未知错误"}`)
-        }
-      }
-    })
+    // pty 就绪：把缓冲的帧按序补发（输入按序写入，尺寸以最后一条 resize 为准）
+    ptyReady = true
+    for (const [data, isBinary] of pending) handleMessage(data, isBinary)
+    pending.length = 0
 
     log.info(`已接入会话终端：${sessionID}（tmux 会话 ${name}）`)
   }
@@ -384,14 +414,22 @@ export function createSidecar({
     idle,
     /** 启动监听（只绑 127.0.0.1：非 localhost 暴露不在本项目范围内） */
     async listen(port = config.port) {
-      await new Promise((resolve, reject) => {
-        const onError = (err) => reject(err)
-        httpServer.once("error", onError)
-        httpServer.listen(port, "127.0.0.1", () => {
-          httpServer.off("error", onError)
-          resolve()
+      try {
+        await new Promise((resolve, reject) => {
+          const onError = (err) => reject(err)
+          httpServer.once("error", onError)
+          httpServer.listen(port, "127.0.0.1", () => {
+            httpServer.off("error", onError)
+            resolve()
+          })
         })
-      })
+      } catch (err) {
+        // 端口占用是用户最常见的启动失败，给中文提示；原始错误留在 cause 里进 debug 日志
+        if (err?.code === "EADDRINUSE") {
+          throw new SidecarError(`端口 ${port} 已被占用，请用 --port 换一个端口`, { cause: err })
+        }
+        throw err
+      }
       const address = httpServer.address()
       const actualPort = typeof address === "object" && address ? address.port : port
       return { port: actualPort, url: `http://127.0.0.1:${actualPort}` }

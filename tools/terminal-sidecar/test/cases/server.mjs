@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import WebSocket from "ws"
 
 import { createSidecar } from "../../src/server.js"
-import { createSilentLogger } from "../../src/log.js"
+import { createLogger, createSilentLogger } from "../../src/log.js"
 import { createFakeClock, createFakePty, createFakeRunCmd, waitFor } from "../helpers.mjs"
 
 const TOKEN = "test-token"
@@ -29,7 +29,7 @@ function okFetch() {
 }
 
 /** 起一个 sidecar（全部外部依赖用假实现） */
-async function startSidecar({ config, fetchImpl, runCmd, spawnPty, clock } = {}) {
+async function startSidecar({ config, fetchImpl, runCmd, spawnPty, clock, logger } = {}) {
   const ptys = []
   const spawnCalls = []
   const sidecar = createSidecar({
@@ -45,7 +45,7 @@ async function startSidecar({ config, fetchImpl, runCmd, spawnPty, clock } = {})
         return pty
       }),
     clock: clock ?? createFakeClock(),
-    logger: createSilentLogger(),
+    logger: logger ?? createSilentLogger(),
   })
   const { port } = await sidecar.listen(0)
   return { sidecar, port, ptys, spawnCalls }
@@ -149,8 +149,81 @@ test("WS：浏览器输入的二进制帧原样写进 pty，resize 控制消息�
     ws.send(JSON.stringify({ type: "resize", cols: 100, rows: 40 }))
     await waitFor(() => pty.written.length > 0 && pty.resized.length > 0)
 
-    assert.equal(pty.written[0], "ls\n")
+    // 输入以 Buffer 原样写入（非 UTF-8 字节不被替换成 U+FFFD）
+    assert.equal(Buffer.isBuffer(pty.written[0]), true)
+    assert.equal(pty.written[0].toString("utf8"), "ls\n")
     assert.deepEqual(pty.resized[0], [100, 40])
+    ws.close()
+  } finally {
+    await sidecar.close()
+  }
+})
+
+test("WS：连接后立刻发来的 resize 不会丢（pty 未就绪时先缓冲）", async () => {
+  // 让 pty 启动慢一点：确保浏览器的首帧在 attach 之前到达
+  let captured
+  const spawnPty = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    captured = createFakePty()
+    return captured
+  }
+  const { sidecar, port } = await startSidecar({ spawnPty })
+  try {
+    const { ws, openPromise } = connect(port)
+    await openPromise
+    ws.send(JSON.stringify({ type: "resize", cols: 132, rows: 43 }))
+
+    const pty = await waitFor(() => captured)
+    await waitFor(() => pty.resized.length > 0)
+    assert.deepEqual(pty.resized[pty.resized.length - 1], [132, 43])
+    ws.close()
+  } finally {
+    await sidecar.close()
+  }
+})
+
+test("WS：pty 未就绪时先到的输入会在 attach 后按序补写", async () => {
+  let captured
+  const spawnPty = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    captured = createFakePty()
+    return captured
+  }
+  const { sidecar, port } = await startSidecar({ spawnPty })
+  try {
+    const { ws, openPromise } = connect(port)
+    await openPromise
+    ws.send(Buffer.from("first\n", "utf8"))
+    ws.send(Buffer.from("second\n", "utf8"))
+
+    const pty = await waitFor(() => captured)
+    await waitFor(() => pty.written.length >= 2)
+    assert.equal(pty.written[0].toString("utf8"), "first\n")
+    assert.equal(pty.written[1].toString("utf8"), "second\n")
+    ws.close()
+  } finally {
+    await sidecar.close()
+  }
+})
+
+test("WS：未知类型的文本控制帧被忽略，不回错误且连接保持", async () => {
+  const logs = []
+  const logger = createLogger({ sink: (line) => logs.push(line), debug: true })
+  const { sidecar, port, ptys } = await startSidecar({ logger })
+  try {
+    const { ws, messages, openPromise } = connect(port)
+    await openPromise
+    const pty = await waitFor(() => ptys[0])
+
+    ws.send(JSON.stringify({ type: "whatever", payload: 1 }))
+    ws.send("这不是 JSON")
+    await waitFor(() => logs.some((line) => line.includes("忽略未知控制消息类型")))
+
+    // 没有错误帧回传，连接仍在，输入也没被写进 pty
+    assert.equal(messages.length, 0)
+    assert.equal(ws.readyState, ws.OPEN)
+    assert.equal(pty.written.length, 0)
+    assert.ok(logs.some((line) => line.includes("忽略无法解析的文本控制帧")))
     ws.close()
   } finally {
     await sidecar.close()
@@ -226,17 +299,17 @@ test("WS：tmux 会话不存在时创建，且用参数数组跑 opencode（不�
   }
 })
 
-test("WS：tmux 里是死面板 → 重建会话", async () => {
-  const runCmd = createFakeRunCmd({
-    "has-session": { code: 0 },
-    "list-panes": { stdout: "1\n" },
-  })
+test("WS：tmux 会话已存在 → 直接 attach，不重建也不 kill", async () => {
+  const runCmd = createFakeRunCmd({ "has-session": { code: 0 } })
   const { sidecar, port } = await startSidecar({ runCmd })
   try {
     const { ws, openPromise } = connect(port)
     await openPromise
-    await waitFor(() => runCmd.findCalls("new-session").length > 0)
-    assert.equal(runCmd.findCalls("kill-session").length, 1)
+    await waitFor(() => sidecar.idle.clientCount("ses_abc") === 1)
+    // 会话已存在：不新建、不 kill
+    assert.equal(runCmd.findCalls("new-session").length, 0)
+    assert.equal(runCmd.findCalls("kill-session").length, 0)
+    assert.equal(runCmd.findCalls("list-panes").length, 0)
     ws.close()
   } finally {
     await sidecar.close()
@@ -310,5 +383,27 @@ test("客户端断开只关自己的 pty 客户端，不 kill 会话（除非超
     assert.equal(runCmd.findCalls("kill-session").length, 0)
   } finally {
     await sidecar.close()
+  }
+})
+
+test("启动：端口被占用时给中文提示（原始错误留在 cause 里）", async () => {
+  const first = createSidecar({ config: makeConfig() })
+  const second = createSidecar({ config: makeConfig() })
+  try {
+    const { port } = await first.listen(0)
+    await assert.rejects(
+      () => second.listen(port),
+      (err) => {
+        assert.equal(err.name, "SidecarError")
+        assert.match(err.message, new RegExp(`端口 ${port} 已被占用`))
+        assert.match(err.message, /--port/)
+        // 原始错误保留在 cause 里（供 debug 日志使用）
+        assert.equal(err.cause?.code, "EADDRINUSE")
+        return true
+      },
+    )
+  } finally {
+    await first.close()
+    await second.close()
   }
 })

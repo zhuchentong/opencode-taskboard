@@ -14,21 +14,28 @@ import {
 } from "../../src/config.js"
 
 test("parseArgs：默认值（端口 7681 / 空闲 30 分钟 / 看板 Origin 白名单）", () => {
-  const args = parseArgs(["--token", "abc"])
+  const args = parseArgs(["--token", "abc12345"])
   assert.equal(args.port, DEFAULT_PORT)
   assert.equal(args.idleTimeoutMinutes, DEFAULT_IDLE_TIMEOUT_MINUTES)
   assert.deepEqual(args.allowOrigins, DEFAULT_ALLOW_ORIGINS)
-  assert.equal(args.token, "abc")
+  assert.equal(args.token, "abc12345")
 })
 
 test("parseArgs：缺少 --token 直接报错", () => {
   assert.throws(() => parseArgs([]), (err) => err instanceof ConfigError && /--token/.test(err.message))
 })
 
+test("parseArgs：--token 短于 8 个字符时报中文错误", () => {
+  assert.throws(
+    () => parseArgs(["--token", "short7c"]),
+    (err) => err instanceof ConfigError && /至少需要 8 个字符/.test(err.message),
+  )
+})
+
 test("parseArgs：--port / --idle-timeout / --allow-origin 生效", () => {
   const args = parseArgs([
     "--token",
-    "abc",
+    "abc12345",
     "--port=7999",
     "--idle-timeout",
     "5",
@@ -44,13 +51,13 @@ test("parseArgs：--port / --idle-timeout / --allow-origin 生效", () => {
 
 test("parseArgs：端口非法时报中文错误", () => {
   assert.throws(
-    () => parseArgs(["--token", "abc", "--port", "70000"]),
+    () => parseArgs(["--token", "abc12345", "--port", "70000"]),
     (err) => err instanceof ConfigError && /--port/.test(err.message),
   )
 })
 
 test("parseArgs：未知参数报错", () => {
-  assert.throws(() => parseArgs(["--token", "abc", "--wat"]), ConfigError)
+  assert.throws(() => parseArgs(["--token", "abc12345", "--wat"]), ConfigError)
 })
 
 test("normalizeDaemonUrl：去掉末尾斜杠并拒绝非 http(s) 地址", () => {
