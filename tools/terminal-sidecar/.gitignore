@@ -1,0 +1,3 @@
+# 本机依赖，不入库（package-lock.json 保留入库以锁定依赖版本）
+node_modules/
+npm-debug.log*
