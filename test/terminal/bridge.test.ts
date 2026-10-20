@@ -123,6 +123,9 @@ describe("终端桥接核心", () => {
     expect(created.args).toContain("board-ses_1")
     expect(created.args).toContain("--")
     expect(created.args).toContain("opencode")
+    // TUI 用 mini 极简界面（无 session tabs 顶栏），--replay 重连回放历史
+    expect(created.args).toContain("mini")
+    expect(created.args).toContain("--replay")
     expect(created.args).toContain("--server")
     expect(created.args).toContain("http://127.0.0.1:49898")
     expect(created.args).toContain("--session")

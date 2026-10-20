@@ -119,7 +119,8 @@ terminal-sidecar（独立 Node 进程，tools/terminal-sidecar/）
    │  src/terminal/bridge.ts（createTerminalBridge）
    ├─ 存在性校验：ctx.session.get({sessionID}) → 404/不存在 → error 帧，**绝不 exec**
    ├─ 服务发现：读 ~/.local/state/opencode/service.json（url + password）→ 失败 → error 帧，**绝不 exec**
-   └─ tmux 承载：`board-<sessionID>` 会话里跑 opencode --server <url> --session <id>
+   └─ tmux 承载：`board-<sessionID>` 会话里跑 opencode mini --server <url> --session <id> --replay
+      （2026-10-20 追加：TUI 用 mini 极简界面，无 session tabs 顶栏；--replay 重连/resize 回放最近 200 条历史）
         └─ 每个浏览器连接一个 attach 客户端：
            script -qefc "stty rows H cols W; tmux attach-session -t board-<id>" /dev/null
              （-e 透传 TUI 退出码；⚠️ script -c/-e 是 util-linux 专有 → 本实现仅 Linux 可用）

@@ -3,7 +3,8 @@
 // 职责（与已退役的 sidecar 同构，但跑在看板服务进程里，用户零配置）：
 // - 会话存在性校验（先于一切 exec：会话不存在绝不启动 TUI）；
 // - daemon 地址与凭据发现（只读本地 service.json，**不 exec 任何 opencode CLI**）；
-// - tmux 承载：`board-<sessionID>` 会话里跑 `opencode --server <url> --session <id>`；
+// - tmux 承载：`board-<sessionID>` 会话里跑 `opencode mini --server <url> --session <id> --replay`
+//   （mini 极简界面：无 session tabs 顶栏；--replay 让重连/resize 时回放最近历史）；
 // - 帧桥接：二进制=终端字节流，文本=JSON 控制消息（resize / error / exit / ping）；
 // - 空闲回收：客户端归零 30 分钟后 kill 掉 tmux 会话。
 //
@@ -316,7 +317,8 @@ export function createTerminalBridge(deps: TerminalBridgeDeps): TerminalBridge {
           rows: DEFAULT_ROWS,
           env: { TERM: TMUX_TERM, OPENCODE_SERVER_PASSWORD: daemon.password },
           command: "opencode",
-          args: ["--server", daemon.url, "--session", state.sessionID],
+          // mini = 极简 TUI（无 session tabs 顶栏）；--replay = 重连/resize 时回放最近历史
+          args: ["mini", "--server", daemon.url, "--session", state.sessionID, "--replay"],
         })
         created = true
       }
