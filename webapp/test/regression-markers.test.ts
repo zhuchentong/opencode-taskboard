@@ -36,13 +36,16 @@ describe("回归基线载体标记", () => {
   test("终端改走同源看板 WS（方案 1）：用 terminalWsUrl + 看板令牌", () => {
     expect(terminal).toContain("terminalWsUrl(")
     expect(terminal).toContain("boardToken()")
-    // 独立的 sidecar 进程与地址/口令配置已退役
-    expect(terminal).not.toContain("sidecar")
+    // 独立的 sidecar 进程与地址/口令配置已退役。
+    // ⚠️ 用精确标记（不拿 "sidecar" 粗筛）：日后注释里提到 sidecar 不该被误判成回归。
     expect(terminal).not.toContain("sidecarWsUrl")
+    expect(terminal).not.toContain("config.sidecarUrl")
+    expect(terminal).not.toContain("sidecarUrl")
   })
   test("任务详情不再有终端设置入口（配置 UI 已删除）", () => {
     expect(detail).not.toContain("TerminalSettings")
     expect(detail).not.toContain("terminalSettingsOpen")
-    expect(detail).not.toContain("sidecar")
+    expect(detail).not.toContain("loadTerminalConfig")
+    expect(detail).not.toContain("sidecarUrl")
   })
 })
