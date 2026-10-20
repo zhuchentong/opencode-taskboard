@@ -43,6 +43,22 @@ describe("createDeltaBuffer", () => {
     buf.push("text", "msg_a", "")
     expect(buf.flush()).toEqual([])
   })
+
+  test("discardMessage 丢弃该消息的全部待冲桶（text 与 reasoning 两种 kind 都丢）", () => {
+    const buf = createDeltaBuffer()
+    buf.push("text", "msg_a", "甲")
+    buf.push("reasoning", "msg_a", "思")
+    buf.push("text", "msg_b", "乙")
+    buf.discardMessage("msg_a")
+    expect(buf.flush()).toEqual([{ type: "text-append", kind: "text", messageID: "msg_b", text: "乙" }])
+  })
+
+  test("discardMessage 对不存在的消息是 no-op", () => {
+    const buf = createDeltaBuffer()
+    buf.push("text", "msg_a", "甲")
+    buf.discardMessage("msg_zzz")
+    expect(buf.flush()).toEqual([{ type: "text-append", kind: "text", messageID: "msg_a", text: "甲" }])
+  })
 })
 
 describe("contentUpdatedFrame", () => {
@@ -552,7 +568,7 @@ describe("createLiveHub", () => {
     expect(got).toEqual([])
   })
 
-  test("subscribe 同步抛错 → 不上抛、log 记录且不变僵尸；下次 attach 自愈并收到帧", async () => {
+  test("subscribe 同步抛错 → 不上抛、log 记录且不变僵尸；失败的那个观看者被关流，下次 attach 自愈并收到帧", async () => {
     const src = fakeSource()
     const realSubscribe = src.deps.subscribe
     let calls = 0
@@ -564,14 +580,21 @@ describe("createLiveHub", () => {
     const hub = createLiveHub(src.deps)
     const got1: LiveFrame[] = []
     const got2: LiveFrame[] = []
-    expect(() => hub.attach("s1", (f) => got1.push(f))).not.toThrow() // 同步抛错不上抛给 attach 调用方
+    let closed1 = 0
+    expect(() =>
+      hub.attach("s1", (f) => got1.push(f), () => {
+        closed1++
+      }),
+    ).not.toThrow() // 同步抛错不上抛给 attach 调用方
     expect(src.logs.length).toBeGreaterThan(0) // 有日志线索，不是静默失效
+    expect(got1).toEqual([{ type: "message-end", messageID: null }]) // 失败方：一帧 message-end
+    expect(closed1).toBe(1) // 失败方：随即关流（前端据此退避重连）
     hub.attach("s1", (f) => got2.push(f)) // 未僵尸化：这次 attach 重建订阅
     src.last().push(DELTA("s1", "m1", "ok"))
     await tick()
     flushTimers(src.timers, 150)
-    expect(got1).toEqual([{ type: "text-append", kind: "text", messageID: "m1", text: "ok" }])
-    expect(got2).toEqual(got1)
+    expect(got2).toEqual([{ type: "text-append", kind: "text", messageID: "m1", text: "ok" }])
+    expect(got1).toEqual([{ type: "message-end", messageID: null }]) // 已关流的观看者不再收帧
     expect(src.count()).toBe(1) // 抛错那次未登记流，成功的这次登记 1 条
     hub.dispose()
   })
@@ -641,6 +664,207 @@ describe("createLiveHub", () => {
     await tick()
     flushTimers(src.timers, 150)
     expect(got).toEqual([{ type: "text-append", kind: "reasoning", messageID: "m1", text: "思考" }])
+    hub.dispose()
+  })
+
+  // —— content 帧与待冲 delta 交叉：正文不得翻倍 ——
+
+  test("content 帧作废同消息的待冲 delta：该消息只剩 content 帧（无 text-append）", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    hub.attach("s1", (f) => got.push(f))
+    src.last().push(DELTA("s1", "m1", "Hello"))
+    await tick()
+    expect(got).toEqual([]) // 增量还压在缓冲里
+    // content 帧是 m1 的权威快照（含已产出的 "Hello"）：同消息的待冲增量必须作废
+    src.last().push({
+      type: "session.message.content.updated",
+      data: { sessionID: "s1", messageID: "m1", content: [{ type: "text", text: "Hello" }] },
+    })
+    await tick()
+    flushTimers(src.timers, 150)
+    expect(got).toEqual([{ type: "content", messageID: "m1", parts: [{ type: "text", text: "Hello" }] }])
+    expect(got.filter((f) => f.type === "text-append")).toEqual([]) // 没有重复的增量帧（否则前端正文翻倍）
+    hub.dispose()
+  })
+
+  test("content 帧作废待冲 delta 时，reasoning 桶一并丢弃（跨两种 kind）", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    hub.attach("s1", (f) => got.push(f))
+    src.last().push(DELTA("s1", "m1", "正文"))
+    await tick()
+    src.last().push({
+      type: "session.reasoning.delta",
+      data: { sessionID: "s1", assistantMessageID: "m1", ordinal: 0, delta: "思考" },
+    })
+    await tick()
+    src.last().push({
+      type: "session.message.content.updated",
+      data: { sessionID: "s1", messageID: "m1", content: [{ type: "text", text: "正文" }] },
+    })
+    await tick()
+    flushTimers(src.timers, 150)
+    expect(got.filter((f) => f.type === "text-append")).toEqual([])
+    expect(got.filter((f) => f.type === "content")).toHaveLength(1)
+    hub.dispose()
+  })
+
+  test("content 帧只作废同消息的桶：别的消息的待冲增量照发", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    hub.attach("s1", (f) => got.push(f))
+    src.last().push(DELTA("s1", "m1", "甲"))
+    await tick()
+    src.last().push(DELTA("s1", "m2", "乙"))
+    await tick()
+    src.last().push({
+      type: "session.message.content.updated",
+      data: { sessionID: "s1", messageID: "m1", content: [{ type: "text", text: "甲" }] },
+    })
+    await tick()
+    flushTimers(src.timers, 150)
+    expect(got).toEqual([
+      { type: "content", messageID: "m1", parts: [{ type: "text", text: "甲" }] },
+      { type: "text-append", kind: "text", messageID: "m2", text: "乙" },
+    ])
+    hub.dispose()
+  })
+
+  test("content 帧之后新到的 delta 照发（桶按需重建）", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    hub.attach("s1", (f) => got.push(f))
+    src.last().push({
+      type: "session.message.content.updated",
+      data: { sessionID: "s1", messageID: "m1", content: [{ type: "text", text: "Hello" }] },
+    })
+    await tick()
+    src.last().push(DELTA("s1", "m1", " world"))
+    await tick()
+    flushTimers(src.timers, 150)
+    expect(got).toEqual([
+      { type: "content", messageID: "m1", parts: [{ type: "text", text: "Hello" }] },
+      { type: "text-append", kind: "text", messageID: "m1", text: " world" },
+    ])
+    hub.dispose()
+  })
+
+  test("冲刷边界：delta 已被冲走再发 content → 帧序 text-append 在前、content 在后", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    hub.attach("s1", (f) => got.push(f))
+    src.last().push(DELTA("s1", "m1", "Hello"))
+    await tick()
+    flushTimers(src.timers, 150) // 增量已冲走（前端已收到 text-append）
+    expect(got).toEqual([{ type: "text-append", kind: "text", messageID: "m1", text: "Hello" }])
+    src.last().push({
+      type: "session.message.content.updated",
+      data: { sessionID: "s1", messageID: "m1", content: [{ type: "text", text: "Hello" }] },
+    })
+    await tick()
+    expect(got).toEqual([
+      { type: "text-append", kind: "text", messageID: "m1", text: "Hello" },
+      { type: "content", messageID: "m1", parts: [{ type: "text", text: "Hello" }] },
+    ])
+    hub.dispose()
+  })
+
+  // —— 订阅死亡 / 建立失败 → 关流（前端唯一终态信号是连接关闭）——
+
+  test("订阅死亡 → 收尾帧（message-end）之后对该会话观看者关流", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    let closed = 0
+    hub.attach("s1", (f) => got.push(f), () => {
+      closed++
+    })
+    src.last().fail(new Error("断连"))
+    await tick()
+    expect(got).toEqual([{ type: "message-end", messageID: null }]) // 先定格
+    expect(closed).toBe(1) // 再关流：前端据此感知实时流终止（否则状态条永远停在「实时」）
+    hub.dispose()
+  })
+
+  test("订阅死亡 → 所有会话的观看者都被关流（跨会话统一收尾）", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got1: LiveFrame[] = []
+    const got2: LiveFrame[] = []
+    let closed1 = 0
+    let closed2 = 0
+    hub.attach("s1", (f) => got1.push(f), () => {
+      closed1++
+    })
+    hub.attach("s2", (f) => got2.push(f), () => {
+      closed2++
+    })
+    src.last().fail(new Error("断连"))
+    await tick()
+    expect(closed1).toBe(1)
+    expect(closed2).toBe(1)
+    expect(got1).toEqual([{ type: "message-end", messageID: null }])
+    expect(got2).toEqual([{ type: "message-end", messageID: null }])
+    hub.dispose()
+  })
+
+  test("subscribe 同步抛错 → 该观看者先收 message-end 再被关流（规格 §6 第 1 行）", async () => {
+    const src = fakeSource()
+    src.deps.subscribe = () => {
+      throw new Error("总线瞬断")
+    }
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    let closed = 0
+    expect(() =>
+      hub.attach("s1", (f) => got.push(f), () => {
+        closed++
+      }),
+    ).not.toThrow() // 同步抛错不上抛给 attach 调用方
+    expect(got).toEqual([{ type: "message-end", messageID: null }])
+    expect(closed).toBe(1) // 关流：前端走退避重连，不会冻在「实时」
+    hub.dispose()
+  })
+
+  test("单个观看者 send 抛错不影响其他观看者的收尾（异常不得逃出泵）", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    let closedBad = 0
+    let closedOk = 0
+    hub.attach("s1", () => {
+      throw new Error("观看者炸了")
+    }, () => {
+      closedBad++
+    })
+    hub.attach("s2", (f) => got.push(f), () => {
+      closedOk++
+    })
+    src.last().fail(new Error("断连"))
+    await tick()
+    expect(closedBad).toBe(1) // 炸掉的观看者照样被关流
+    expect(closedOk).toBe(1)
+    expect(got).toEqual([{ type: "message-end", messageID: null }]) // 别的观看者照常收到收尾帧
+    hub.dispose()
+  })
+
+  test("单个观看者 close 抛错不影响其他观看者收尾", async () => {
+    const src = fakeSource()
+    const hub = createLiveHub(src.deps)
+    const got: LiveFrame[] = []
+    hub.attach("s1", () => {}, () => {
+      throw new Error("关流炸了")
+    })
+    hub.attach("s2", (f) => got.push(f))
+    src.last().fail(new Error("断连"))
+    await tick()
+    expect(got).toEqual([{ type: "message-end", messageID: null }])
     hub.dispose()
   })
 })

@@ -68,8 +68,12 @@ export function createServer(
     listModels?: () => Promise<string[]>
     /** 任务上下文分页读取(worker 会话消息;index 注入 context reader,测试可 mock);缺省路由返回空页 */
     readContext?: (input: ContextReadInput) => Promise<ContextPage>
-    /** 实时上下文流：注册观看者，返回 detach（index 注入 liveHub.attach，测试可 mock）；缺省路由走无会话分支 */
-    subscribeLive?: (sessionID: string, send: (frame: LiveFrame) => void) => () => void
+    /**
+     * 实时上下文流：注册观看者，返回 detach（index 注入 liveHub.attach，测试可 mock）；缺省路由走无会话分支。
+     * close 是可选的关流回调：注入方（hub）判定订阅死亡/建立失败时调用它关掉这条 SSE——
+     * 连接关闭是前端唯一的实时流终态信号。
+     */
+    subscribeLive?: (sessionID: string, send: (frame: LiveFrame) => void, close?: () => void) => () => void
     /** 每次写广播快照后异步触发（自动派发器等观察者）；携带快照任务列表（沿驱动实时消费），不影响响应 */
     onWrite?: (tasks: Task[]) => void
   },
@@ -178,9 +182,15 @@ export function createServer(
   /** 实时流观看者：与 Subscriber 同构（心跳守护复用），独立集合——帧源是 live hub，不参与 emit 快照广播 */
   const liveWatchers = new Set<Subscriber>()
 
+  /**
+   * 关掉一个实时流观看者：清心跳 + 反注册 + 关流。
+   * 幂等：任何退出路径（正常收尾、背压丢帧、abort、hub 侧关流、挂载失败）都走这里，重复调用无副作用。
+   * 清 interval 不依赖集合成员资格——观看者未必在集合里（挂载失败已提前摘除），
+   * 若按成员资格早退，interval 就成了永不停转的僵尸心跳。
+   */
   function removeLiveWatcher(w: Subscriber): void {
-    if (!liveWatchers.delete(w)) return
     clearInterval(w.heartbeat)
+    liveWatchers.delete(w)
     try {
       w.controller.close()
     } catch {
@@ -322,8 +332,17 @@ export function createServer(
         }
       }, SSE_HEARTBEAT_MS),
     }
-    detach = opts.subscribeLive(sessionID, send)
+    // 先入集合再挂载：挂载途中抛错时 removeLiveWatcher 才能把它摘掉（不漏心跳）
     liveWatchers.add(watcher)
+    try {
+      // close 回调交给注入方：hub 判定订阅死亡/建立失败时据此关流——
+      // 连接关闭是前端唯一的实时流终态信号（否则状态条永远停在「实时」）
+      detach = opts.subscribeLive(sessionID, send, cleanup)
+    } catch (err) {
+      // 挂载失败：清心跳 + 关流后原样上抛（路由层转 500），不留僵尸心跳
+      cleanup()
+      throw err
+    }
     req.signal.addEventListener("abort", () => cleanup())
     if (req.signal.aborted) cleanup()
     try {
@@ -457,8 +476,11 @@ export function createServer(
         return Response.json({ sessionID, total: 0, page: [], nextCursor: null, hasMore: false })
       }
       const url = new URL(req.url)
-      const rawLimit = Number(url.searchParams.get("limit"))
-      const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 200) : 50
+      // limit 缺省（前端从不传）落到 NaN 分支 → 默认 50；
+      // 注意不能直接 Number(null)：那是 0，会被夹成 1（真实环境每页只显示 1 条消息）
+      const rawLimit = url.searchParams.get("limit")
+      const parsedLimit = rawLimit === null ? NaN : Number(rawLimit)
+      const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(Math.trunc(parsedLimit), 1), 200) : 50
       const cursor = url.searchParams.get("cursor") ?? undefined
       return Response.json(await opts.readContext({ sessionID, cursor, limit }))
     }

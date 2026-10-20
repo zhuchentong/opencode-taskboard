@@ -242,6 +242,26 @@ describe("GET /api/tasks/:id/context", () => {
     expect(calls[3]!.limit).toBe(200)
   })
 
+  test("不传 limit → 走默认 50 条（缺省不得被解析成 1：前端首页只显示 1 条消息）", async () => {
+    const calls: Array<{ sessionID: string; cursor?: string; limit: number }> = []
+    const { base, store } = await setup(async (input) => {
+      calls.push(input)
+      return { sessionID: input.sessionID, total: 1, page: [], nextCursor: null, hasMore: false }
+    })
+    const t = await store.create({ title: "有会话" })
+    await store.patch(t.id, { status: "pending" })
+    await store.claim({ id: t.id, sessionID: "ses_w", agent: "build" })
+
+    // 前端 fetchTaskContext 从不传 limit（webapp/src/lib/api.ts）：这一路必须落默认 50
+    await fetch(`${base}/api/tasks/${t.id}/context`)
+    expect(calls[0]!.limit).toBe(50)
+
+    // 只带 cursor（翻页）同样不传 limit
+    await fetch(`${base}/api/tasks/${t.id}/context?cursor=abc`)
+    expect(calls[1]!.limit).toBe(50)
+    expect(calls[1]!.cursor).toBe("abc")
+  })
+
   test("human claim（sessionID 为空串）→ 视为无会话", async () => {
     const { base, store } = await setup()
     const t = await store.create({ title: "人工" })

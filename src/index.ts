@@ -210,7 +210,7 @@ export async function arbitrate(opts: {
   logs: () => readonly string[]
   hooks: { onWrite?: (tasks: Task[]) => void }
   /** 实时上下文流：注册观看者并返回 detach（主/次实例同样接线——事件总线是 daemon 全局的） */
-  subscribeLive?: (sessionID: string, send: (frame: LiveFrame) => void) => () => void
+  subscribeLive?: (sessionID: string, send: (frame: LiveFrame) => void, close?: () => void) => () => void
 }): Promise<{ handle: ServerHandle; store: Store; primary: boolean; primaryPort: number }> {
   /** 会话上下文读取器：只读打开 opencode 会话库，惰性连接（构造零 IO），主/次实例共用同一实例 */
   const contextReader = createContextReader()
@@ -338,8 +338,9 @@ export default Plugin.define({
         log,
         logs: () => logs,
         hooks,
-        // 主/次实例同样接线：事件总线是 daemon 全局的，本实例的观看者由本实例的 hub 服务
-        subscribeLive: (sessionID, send) => liveHub.attach(sessionID, send),
+        // 主/次实例同样接线：事件总线是 daemon 全局的，本实例的观看者由本实例的 hub 服务。
+        // close 透传给 hub：订阅死亡/建立失败时 hub 调它关流（前端唯一终态信号是连接关闭）
+        subscribeLive: (sessionID, send, close) => liveHub.attach(sessionID, send, close),
       })
       log(`就绪：${arb.primary ? "主实例" : "次要实例"} board=http://127.0.0.1:${arb.primaryPort}/`)
 
