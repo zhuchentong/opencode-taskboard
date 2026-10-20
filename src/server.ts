@@ -6,6 +6,7 @@ import { StoreError } from "./types"
 import type { BoardSettings, Project, Store, Task } from "./types"
 import type { ContextPage, ContextReadInput } from "./context"
 import type { LiveFrame } from "./live"
+import type { TerminalBridge } from "./terminal"
 
 export type ServerEvent = { type: "hello" } | { type: "snapshot"; tasks: Task[]; settings: BoardSettings; projects: Project[] }
 
@@ -76,6 +77,11 @@ export function createServer(
     subscribeLive?: (sessionID: string, send: (frame: LiveFrame) => void, close?: () => void) => () => void
     /** 每次写广播快照后异步触发（自动派发器等观察者）；携带快照任务列表（沿驱动实时消费），不影响响应 */
     onWrite?: (tasks: Task[]) => void
+    /**
+     * 终端桥（WebSocket 通道）：把 opencode TUI 桥到浏览器 xterm。
+     * 未注入（次要实例 / 未装配）→ 终端路由直接 404。
+     */
+    terminal?: TerminalBridge
   },
 ): ServerHandle {
   const { token, webDir } = opts
@@ -377,7 +383,7 @@ export function createServer(
     })
   }
 
-  async function api(req: Request, pathname: string): Promise<Response> {
+  async function api(req: Request, pathname: string): Promise<Response | undefined> {
     const method = req.method
     if (pathname === "/api/health") {
       return Response.json({ ok: true, primary: opts.primary, projectID: opts.projectID })
@@ -493,6 +499,33 @@ export function createServer(
     if (ctxLiveMatch && method === "GET") {
       return handleLive(req, decodeURIComponent(ctxLiveMatch[1]))
     }
+    /**
+     * 任务终端（WebSocket 升级）：把 opencode TUI 桥到浏览器 xterm（看板「终端」Tab 的数据源）。
+     * - **必须 token 门禁**：这是可写面（能往 TUI 里敲字）。浏览器 WS 无法带自定义头，
+     *   token 只能走 query 参数；比对口径与写路由的 guard 同款（不一致 → 401）。
+     * - 未装配（次要实例 / 未注入 terminal）→ 404：宁可明确「没这功能」，别半吊子放行。
+     * - 升级成功 → 返回 undefined（Bun 自己回 101）；升级失败 → 400。
+     */
+    const terminalMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/terminal$/)
+    if (terminalMatch && method === "GET") {
+      if (!opts.terminal) {
+        return Response.json({ error: { code: "not_found", message: "终端功能未启用" } }, { status: 404 })
+      }
+      const turl = new URL(req.url)
+      if ((turl.searchParams.get("token") ?? "") !== token) {
+        return Response.json({ error: { code: "forbidden", message: "缺少或错误的访问令牌" } }, { status: 401 })
+      }
+      const task = await store.get(decodeURIComponent(terminalMatch[1]))
+      const sessionID = task.claim?.sessionID || null
+      if (!sessionID) {
+        return Response.json({ error: { code: "not_found", message: "任务尚无会话，无法打开终端" } }, { status: 404 })
+      }
+      const upgraded = server.upgrade(req, { data: { sessionID } })
+      if (!upgraded) {
+        return Response.json({ error: { code: "invalid_input", message: "WebSocket 升级失败" } }, { status: 400 })
+      }
+      return undefined
+    }
     if (pathname === "/api/claim" && method === "POST") {
       const bad = guard(req)
       if (bad) return bad
@@ -572,10 +605,43 @@ export function createServer(
     // 每次空闲超 10s 连接就被服务端掐掉，浏览器表现为「重连中/实时」反复切换 + 点击无反应。
     // 255s 为 Bun 允许的最大值；心跳 25s < 255s，保活充分（终审后真实验收发现的根因）。
     idleTimeout: 255,
+    /**
+     * 终端 WebSocket 通道。
+     * - `websocket` 配置对非 WS 请求无影响（SSE 路由照常走 fetch 分支）。
+     * - idleTimeout 120s（Bun 上限 255）：另有**应用层** 25s ping 帧（{"type":"ping"}）保活兜底。
+     */
+    websocket: {
+      idleTimeout: 120,
+      open(ws) {
+        const terminal = opts.terminal
+        const data = ws.data as { sessionID?: string } | undefined
+        const sessionID = data?.sessionID
+        if (!terminal || !sessionID) {
+          try {
+            ws.close(1008, !terminal ? "终端功能未启用" : "缺少会话 ID")
+          } catch {
+            // 已关闭
+          }
+          return
+        }
+        void terminal.handle(ws, sessionID)
+      },
+      message(ws, msg) {
+        opts.terminal?.onMessage(ws, msg as string | Uint8Array)
+      },
+      close(ws) {
+        opts.terminal?.onClose(ws)
+      },
+    },
     async fetch(req) {
       const url = new URL(req.url)
       try {
-        if (url.pathname.startsWith("/api/")) return await api(req, url.pathname)
+        if (url.pathname.startsWith("/api/")) {
+          const res = await api(req, url.pathname)
+          // 终端 WS 升级成功时 api 返回 undefined —— Bun 要求此时不返回 Response（由它回 101）
+          if (res) return res
+          return undefined as unknown as Response
+        }
         if (req.method === "GET") return await serveStatic(url.pathname)
         return Response.json({ error: { code: "not_found", message: "未知路径" } }, { status: 404 })
       } catch (e) {

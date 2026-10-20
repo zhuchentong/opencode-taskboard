@@ -7,6 +7,7 @@ import { clientStore } from "./client"
 import { createContextReader } from "./context"
 import { createLiveHub, type LiveEvent, type LiveFrame } from "./live"
 import { initDispatcher, DISPATCH_CAPS } from "./dispatcher"
+import { createTerminalBridge, type TerminalBridge } from "./terminal"
 import type { Task } from "./types"
 
 const BASE_PORT_DEFAULT = 4370
@@ -211,6 +212,12 @@ export async function arbitrate(opts: {
   hooks: { onWrite?: (tasks: Task[]) => void }
   /** 实时上下文流：注册观看者并返回 detach（主/次实例同样接线——事件总线是 daemon 全局的） */
   subscribeLive?: (sessionID: string, send: (frame: LiveFrame) => void, close?: () => void) => () => void
+  /**
+   * 终端桥（WebSocket 通道）。
+   * 仅**主实例**注入：次要实例的终端路由直接 404（终端是本机单写者语义，
+   * 两个实例各起一份 tmux 终端会打架）。
+   */
+  terminal?: TerminalBridge
 }): Promise<{ handle: ServerHandle; store: Store; primary: boolean; primaryPort: number }> {
   /** 会话上下文读取器：只读打开 opencode 会话库，惰性连接（构造零 IO），主/次实例共用同一实例 */
   const contextReader = createContextReader()
@@ -228,6 +235,8 @@ export async function arbitrate(opts: {
         readContext: (input) => contextReader.read(input),
         subscribeLive: opts.subscribeLive,
         onWrite: (tasks) => opts.hooks.onWrite?.(tasks),
+        // 终端桥只装主实例（次要实例终端路由 404）
+        terminal: primary ? opts.terminal : undefined,
       })
     } catch {
       return undefined
@@ -328,6 +337,28 @@ export default Plugin.define({
     // 异常语义保持现状：safeRegister 仍先停服再重抛，其余异常原样冒泡。
     let arb: Awaited<ReturnType<typeof arbitrate>>
     let dispatcher: ReturnType<typeof initDispatcher> | null = null
+    // 终端桥（WebSocket 通道）：构造零 IO（服务发现/建会话都发生在浏览器连上来的那一刻）。
+    // 会话存在性校验走 opencode SDK（ctx.session.get）——会话不存在时终端桥**绝不**启动 TUI。
+    const sessionApi = ctx.session as unknown as {
+      get(input: { sessionID: string }): Promise<unknown>
+    }
+    const terminal = createTerminalBridge({
+      checkSession: async (sessionID: string) => {
+        try {
+          const info = await sessionApi.get({ sessionID })
+          if (!info) return { ok: false, message: `会话不存在：${sessionID}` }
+          const directory = (info as { location?: { directory?: unknown } }).location?.directory
+          return { ok: true, directory: typeof directory === "string" ? directory : undefined }
+        } catch {
+          return { ok: false, message: `会话不存在或无法访问：${sessionID}` }
+        }
+      },
+      logger: {
+        info: (m: string) => log(`终端：${m}`),
+        warn: (m: string) => log(`终端：${m}`),
+        error: (m: string) => log(`终端：${m}`),
+      },
+    })
     try {
       arb = await arbitrate({
         port,
@@ -341,6 +372,8 @@ export default Plugin.define({
         // 主/次实例同样接线：事件总线是 daemon 全局的，本实例的观看者由本实例的 hub 服务。
         // close 透传给 hub：订阅死亡/建立失败时 hub 调它关流（前端唯一终态信号是连接关闭）
         subscribeLive: (sessionID, send, close) => liveHub.attach(sessionID, send, close),
+        // 终端桥：只注入主实例（次要实例终端路由 404）
+        terminal,
       })
       log(`就绪：${arb.primary ? "主实例" : "次要实例"} board=http://127.0.0.1:${arb.primaryPort}/`)
 
@@ -411,9 +444,11 @@ export default Plugin.define({
       throw e
     }
 
-    return () => {
+    return async () => {
       dispatcher?.dispose()
       liveHub.dispose()
+      // 终端桥：只关自身连接与子进程，**不动 tmux 会话**（跨重启持久是设计目标）
+      await terminal.close()
       arb.handle.stop()
       log("已卸载，HTTP 服务停止")
     }
