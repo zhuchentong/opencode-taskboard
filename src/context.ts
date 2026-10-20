@@ -199,6 +199,8 @@ export function createContextReader(opts: { dbPath?: string } = {}): ContextRead
     } catch {
       return []
     }
+    // 合法 JSON 但不是普通对象（null/数组/标量）同样降级为无 parts，不炸整页
+    if (!data || typeof data !== "object" || Array.isArray(data)) return []
     if (Array.isArray(data.content)) {
       const parts: ContextPart[] = []
       for (const raw of data.content) {

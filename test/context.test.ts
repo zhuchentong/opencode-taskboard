@@ -315,17 +315,42 @@ describe("createContextReader（v2 schema）", () => {
     expect(parts[2]).toEqual({ type: "tool", tool: "shell", state: "completed", input: '{"code":"ls"}', output: "a.ts\nb.ts" })
   })
 
-  test("游标翻页：同构复合游标不漏不重", async () => {
+  test("游标翻页：同构复合游标不漏不重（同毫秒组被页界切开）", async () => {
     const { db, path } = makeDbV2()
-    for (let i = 0; i < 3; i++) seedV2(db, `m${i}`, "ses_v2", 1000 + i, "assistant", { time: { created: 1000 + i }, content: [{ type: "text", text: `第${i}条` }] })
+    // 与 legacy 同款：10 条同毫秒 + 前后各 45 条，页大小 50 恰好把同毫秒组切在页界
+    let tc = 1000
+    for (let i = 0; i < 45; i++) seedV2(db, `a${String(i).padStart(3, "0")}`, "ses_v2", tc++, "assistant", { time: { created: tc }, content: [{ type: "text", text: "x" }] })
+    for (let i = 0; i < 10; i++) seedV2(db, `b${String(i).padStart(3, "0")}`, "ses_v2", 2000, "assistant", { time: { created: 2000 }, content: [{ type: "text", text: "同毫秒" }] })
+    for (let i = 0; i < 45; i++) seedV2(db, `c${String(i).padStart(3, "0")}`, "ses_v2", tc++, "assistant", { time: { created: tc }, content: [{ type: "text", text: "y" }] })
     const reader = createContextReader({ dbPath: persist(path) })
-    const p1 = await reader.read({ sessionID: "ses_v2", limit: 2 })
-    expect(p1.page.map((m) => m.id)).toEqual(["m2", "m1"])
-    expect(p1.hasMore).toBe(true)
-    const p2 = await reader.read({ sessionID: "ses_v2", limit: 2, cursor: p1.nextCursor! })
-    expect(p2.page.map((m) => m.id)).toEqual(["m0"])
-    expect(p2.hasMore).toBe(false)
-    expect(p2.nextCursor).toBeNull()
+    const seen: string[] = []
+    let cursor: string | undefined
+    for (let guard = 0; guard < 10; guard++) {
+      const page = await reader.read({ sessionID: "ses_v2", cursor, limit: 50 })
+      seen.push(...page.page.map((m) => m.id))
+      if (!page.hasMore) break
+      cursor = page.nextCursor ?? undefined
+    }
+    expect(seen).toHaveLength(100)
+    expect(new Set(seen).size).toBe(100)
+  })
+
+  test("坏数据行降级不炸整页：非对象 JSON（null/数组/标量）一律跳过", async () => {
+    const { db, path } = makeDbV2()
+    seedV2(db, "ok1", "ses_v2", 1000, "assistant", { time: { created: 1000 }, content: [{ type: "text", text: "正常" }] })
+    seedV2(db, "bad1", "ses_v2", 2000, "assistant", null) // SQL NULL 列值
+    db.run("UPDATE session_message SET data = 'null' WHERE id = 'bad1'")
+    seedV2(db, "bad2", "ses_v2", 3000, "assistant", "123") // 标量 JSON
+    seedV2(db, "bad3", "ses_v2", 4000, "assistant", "[1,2]") // 数组 JSON
+    seedV2(db, "ok2", "ses_v2", 5000, "user", { time: { created: 5000 }, text: "也正常" })
+    const reader = createContextReader({ dbPath: persist(path) })
+    const page = await reader.read({ sessionID: "ses_v2" })
+    expect(page.total).toBe(5) // 坏行仍计数（与 legacy 的「跳过 part 不丢消息」口径一致）
+    expect(page.page.map((m) => m.id)).toEqual(["ok2", "bad3", "bad2", "bad1", "ok1"])
+    expect(page.page.find((m) => m.id === "ok1")!.parts).toEqual([{ type: "text", text: "正常" }])
+    expect(page.page.find((m) => m.id === "bad1")!.parts).toEqual([])
+    expect(page.page.find((m) => m.id === "bad2")!.parts).toEqual([])
+    expect(page.page.find((m) => m.id === "bad3")!.parts).toEqual([])
   })
 
   test("normalizePart 兼容 v2 tool 形状（name 字段 + state.content 文本数组）", () => {
