@@ -7,6 +7,10 @@
 //
 // 因此 xterm 的 onData 回调（给的是字符串）必须先经 TextEncoder 编码再发：
 // 直接发字符串会变成文本帧，被 sidecar 当成控制消息忽略掉（终端表现为「敲键盘没反应」）。
+//
+// 【过渡态】看板内置终端桥（方案 1）已就位：终端 WS 改为**同源**直连看板服务
+// （`/api/tasks/:id/terminal?token=…`），用户零配置。
+// 下一步将删除 sidecar 地址/口令配置类导出（sidecarWsUrl / 配置读写 / terminalAvailable）。
 
 /** 终端配置（持久化在 localStorage） */
 export interface TerminalConfig {
@@ -22,6 +26,43 @@ export const TERMINAL_TOKEN_KEY = "taskboard:terminal:token"
 
 /** WebSocket readyState：已连接（不依赖浏览器的 WebSocket.OPEN 常量，便于纯函数环境使用） */
 export const WS_READY_OPEN = 1
+
+/** 看板终端 WS 路由前缀（与 src/server.ts 的路由正则同款） */
+export const TERMINAL_WS_PATH = "/api/tasks"
+
+/** 页面位置（默认取浏览器 location；纯函数测试可注入假值） */
+export interface TerminalLocation {
+  /** 页面协议，如 http: / https: */
+  protocol: string
+  /** 页面主机（含端口），如 127.0.0.1:4370 */
+  host: string
+}
+
+/**
+ * 看板访问令牌（服务端注入 window.__TASKBOARD_TOKEN__）。
+ *
+ * 惰性读取：模块加载期不碰 window（bun 测试环境无 DOM）；取不到 → 空串
+ * （调用方按「无法连接」处理，不去连）。
+ */
+export function boardToken(): string {
+  try {
+    const w = globalThis as unknown as { window?: { __TASKBOARD_TOKEN__?: string } }
+    return (w.window?.__TASKBOARD_TOKEN__ ?? "").trim()
+  } catch {
+    return ""
+  }
+}
+
+/** 当前页面位置（bun 测试环境无 location → null） */
+function currentLocation(): TerminalLocation | null {
+  try {
+    const loc = globalThis.location
+    if (!loc) return null
+    return { protocol: loc.protocol, host: loc.host }
+  } catch {
+    return null
+  }
+}
 
 /** sidecar 默认放行的看板 Origin（与 sidecar 启动参数默认值一致） */
 export const DEFAULT_ALLOWED_ORIGINS = ["http://127.0.0.1:4370", "http://localhost:4370"]
@@ -111,6 +152,29 @@ function wsScheme(protocol: string): "ws" | "wss" | null {
     default:
       return null
   }
+}
+
+/**
+ * 拼接看板内置终端桥的 WebSocket 地址（**同源**）。
+ *
+ * - 协议映射：http→ws、https→wss（ws/wss 原样保留）
+ * - taskID 与 token 走 URL 编码（浏览器 WS 带不了自定义头，token 只能走 query）
+ * - 缺 taskID / 缺 token / 无页面位置 / 协议非法 → 返回空串（调用方按「无法连接」处理）
+ */
+export function terminalWsUrl(
+  taskID: string,
+  token: string,
+  loc?: TerminalLocation,
+): string {
+  const id = taskID.trim()
+  const tk = token.trim()
+  if (!id || !tk) return ""
+  const l = loc ?? currentLocation()
+  if (!l) return ""
+  const scheme = wsScheme(l.protocol)
+  const host = (l.host ?? "").trim()
+  if (!scheme || !host) return ""
+  return `${scheme}://${host}${TERMINAL_WS_PATH}/${encodeURIComponent(id)}/terminal?token=${encodeURIComponent(tk)}`
 }
 
 /**

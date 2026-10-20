@@ -17,8 +17,14 @@ import {
   sidecarWsUrl,
   terminalAvailable,
   terminalConnKey,
+  terminalWsUrl,
+  boardToken,
   type TerminalStorage,
 } from "../src/lib/terminal"
+
+/** 假页面位置（同源终端 WS 地址构造用） */
+const HTTP_LOC = { protocol: "http:", host: "127.0.0.1:4370" }
+const HTTPS_LOC = { protocol: "https:", host: "board.local" }
 
 /** 假 localStorage：可模拟「读取抛错」「写入抛错」两种异常路径 */
 function fakeStorage(initial: Record<string, string> = {}): TerminalStorage & {
@@ -35,6 +41,108 @@ function fakeStorage(initial: Record<string, string> = {}): TerminalStorage & {
     },
   }
 }
+
+describe("terminalWsUrl（同源终端 WS 地址）", () => {
+  test("http → ws，同源看板地址", () => {
+    expect(terminalWsUrl("task-1", "tok", HTTP_LOC)).toBe(
+      "ws://127.0.0.1:4370/api/tasks/task-1/terminal?token=tok",
+    )
+  })
+
+  test("https → wss", () => {
+    expect(terminalWsUrl("task-1", "tok", HTTPS_LOC)).toBe(
+      "wss://board.local/api/tasks/task-1/terminal?token=tok",
+    )
+  })
+
+  test("ws / wss 原样保留", () => {
+    expect(terminalWsUrl("task-1", "tok", { protocol: "ws:", host: "127.0.0.1:4370" })).toBe(
+      "ws://127.0.0.1:4370/api/tasks/task-1/terminal?token=tok",
+    )
+    expect(terminalWsUrl("task-1", "tok", { protocol: "wss:", host: "board.local" })).toBe(
+      "wss://board.local/api/tasks/task-1/terminal?token=tok",
+    )
+  })
+
+  test("taskID 与 token 都做 URL 编码", () => {
+    const url = terminalWsUrl("task a/b", "to k&x=1", HTTP_LOC)
+    expect(url).toBe("ws://127.0.0.1:4370/api/tasks/task%20a%2Fb/terminal?token=to%20k%26x%3D1")
+    // 编码后服务端解码回来仍是原值（路由按 decodeURIComponent 取任务 ID）
+    const parsed = new URL(url)
+    expect(decodeURIComponent(parsed.pathname)).toBe("/api/tasks/task a/b/terminal")
+    expect(parsed.searchParams.get("token")).toBe("to k&x=1")
+  })
+
+  test("缺 taskID 或 token → 空串（调用方按无法连接处理）", () => {
+    expect(terminalWsUrl("", "tok", HTTP_LOC)).toBe("")
+    expect(terminalWsUrl("task-1", "", HTTP_LOC)).toBe("")
+    expect(terminalWsUrl("   ", "tok", HTTP_LOC)).toBe("")
+  })
+
+  test("非法协议 / 空 host → 空串", () => {
+    expect(terminalWsUrl("task-1", "tok", { protocol: "ftp:", host: "127.0.0.1:4370" })).toBe("")
+    expect(terminalWsUrl("task-1", "tok", { protocol: "http:", host: "  " })).toBe("")
+  })
+
+  test("协议大小写不敏感（HTTP: → ws:）", () => {
+    expect(terminalWsUrl("task-1", "tok", { protocol: "HTTP:", host: "127.0.0.1:4370" })).toBe(
+      "ws://127.0.0.1:4370/api/tasks/task-1/terminal?token=tok",
+    )
+  })
+
+  test("host 不含端口也能用（默认端口由浏览器补）", () => {
+    expect(terminalWsUrl("task-1", "tok", { protocol: "https:", host: "board.local" })).toBe(
+      "wss://board.local/api/tasks/task-1/terminal?token=tok",
+    )
+  })
+
+  test("任务 ID 里的 # 与中文都被编码（防路径歧义）", () => {
+    const url = terminalWsUrl("任务#1", "tok", HTTP_LOC)
+    expect(url).toBe("ws://127.0.0.1:4370/api/tasks/%E4%BB%BB%E5%8A%A1%231/terminal?token=tok")
+    expect(decodeURIComponent(new URL(url).pathname)).toBe("/api/tasks/任务#1/terminal")
+  })
+
+  test("token 里的 # 与 % 都被编码", () => {
+    const url = terminalWsUrl("task-1", "a#b%c", HTTP_LOC)
+    expect(url).toBe("ws://127.0.0.1:4370/api/tasks/task-1/terminal?token=a%23b%25c")
+    expect(new URL(url).searchParams.get("token")).toBe("a#b%c")
+  })
+
+  test("无页面位置（bun 测试环境无 DOM）→ 空串", () => {
+    expect(terminalWsUrl("task-1", "tok")).toBe("")
+    expect(terminalWsUrl("task-1", "tok", undefined)).toBe("")
+  })
+})
+
+describe("看板令牌读取", () => {
+  test("bun 测试环境无 window → 空串（不抛异常）", () => {
+    expect(boardToken()).toBe("")
+  })
+
+  test("window 注入令牌后能读到（并去空白）", () => {
+    const g = globalThis as unknown as { window?: { __TASKBOARD_TOKEN__?: string } }
+    const prev = g.window
+    g.window = { __TASKBOARD_TOKEN__: "  tok-123  " }
+    try {
+      expect(boardToken()).toBe("tok-123")
+    } finally {
+      if (prev === undefined) delete g.window
+      else g.window = prev
+    }
+  })
+
+  test("window 存在但没有令牌字段 → 空串", () => {
+    const g = globalThis as unknown as { window?: { __TASKBOARD_TOKEN__?: string } }
+    const prev = g.window
+    g.window = {}
+    try {
+      expect(boardToken()).toBe("")
+    } finally {
+      if (prev === undefined) delete g.window
+      else g.window = prev
+    }
+  })
+})
 
 describe("sidecarWsUrl", () => {
   test("http → ws 且去尾斜杠", () => {
@@ -190,6 +298,20 @@ describe("控制帧编解码", () => {
     expect(parseTerminalControl('{"type":"unknown"}')).toBeNull()
     expect(parseTerminalControl('{"type":"error"}')).toBeNull()
     expect(parseTerminalControl('{"type":"resize","cols":"120","rows":40}')).toBeNull()
+  })
+
+  test("心跳 ping 帧被忽略（null）——服务端 25s 保活，不是错误", () => {
+    expect(parseTerminalControl('{"type":"ping"}')).toBeNull()
+  })
+
+  test("exit 的 code 不是数字 → 按 0 处理", () => {
+    expect(parseTerminalControl('{"type":"exit","code":"x"}')).toEqual({ type: "exit", code: 0 })
+  })
+
+  test("顶层不是对象（数字/字符串/null）→ null", () => {
+    expect(parseTerminalControl("42")).toBeNull()
+    expect(parseTerminalControl('"error"')).toBeNull()
+    expect(parseTerminalControl("null")).toBeNull()
   })
 
   test("resize 帧编码为 JSON 文本", () => {

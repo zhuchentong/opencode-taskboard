@@ -3,6 +3,7 @@ import {
   encodeTerminalInput,
   encodeTerminalResize,
   parseTerminalControl,
+  terminalWsUrl,
 } from "../src/lib/terminal"
 
 // 与 sidecar 的帧协议做真实 WebSocket 往返（bun 自带 WS 服务端，浏览器行为一致）：
@@ -92,6 +93,66 @@ describe("WebSocket 帧协议往返", () => {
       expect(controls).toEqual([{ type: "exit", code: 0 }])
     } finally {
       ws.close()
+      server.stop(true)
+    }
+  })
+})
+
+describe("同源终端 WS 路由契约", () => {
+  /** 模拟 src/server.ts 的终端路由：路径 /api/tasks/:id/terminal + token 门禁 */
+  function terminalRouteServer() {
+    /** 升级时记下的路由参数（供断言） */
+    const state: { upgraded: { taskID: string; token: string } | null } = { upgraded: null }
+    let resolveUp: () => void = () => {}
+    const up = new Promise<void>((resolve) => (resolveUp = resolve))
+    const server = Bun.serve({
+      port: 0,
+      fetch(req, srv) {
+        const url = new URL(req.url)
+        const m = url.pathname.match(/^\/api\/tasks\/([^/]+)\/terminal$/)
+        if (!m) return new Response("not found", { status: 404 })
+        const token = url.searchParams.get("token") ?? ""
+        if (token !== "tok") return new Response("forbidden", { status: 401 })
+        state.upgraded = { taskID: decodeURIComponent(m[1]), token }
+        if (srv.upgrade(req)) {
+          resolveUp()
+          return undefined as unknown as Response
+        }
+        return new Response("upgrade failed", { status: 400 })
+      },
+      websocket: {
+        open() {
+          // 真实服务里会在这里 attach tmux 客户端；本用例只验路由与 token
+        },
+      },
+    })
+    return { server, up, state }
+  }
+
+  test("terminalWsUrl 生成的地址能被服务端路由识别（路径 + token）", async () => {
+    const { server, up, state } = terminalRouteServer()
+    try {
+      const url = terminalWsUrl("task-1", "tok", { protocol: "http:", host: `127.0.0.1:${server.port}` })
+      expect(url).toBe(`ws://127.0.0.1:${server.port}/api/tasks/task-1/terminal?token=tok`)
+      const ws = new WebSocket(url)
+      try {
+        await up
+        expect(state.upgraded).toEqual({ taskID: "task-1", token: "tok" })
+      } finally {
+        ws.close()
+      }
+    } finally {
+      server.stop(true)
+    }
+  })
+
+  test("token 不匹配 → 服务端 401 拒接（浏览器只会收到通用 onerror）", async () => {
+    const { server } = terminalRouteServer()
+    try {
+      const url = terminalWsUrl("task-1", "wrong", { protocol: "http:", host: `127.0.0.1:${server.port}` })
+      const res = await fetch(url.replace(/^ws:/, "http:"))
+      expect(res.status).toBe(401)
+    } finally {
       server.stop(true)
     }
   })
