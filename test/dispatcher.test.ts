@@ -3,7 +3,6 @@ import {
   countActive,
   DISPATCH_CAPS,
   nextBackoffMs,
-  nextTimeoutBackoffMs,
   shouldDispatch,
   shouldPauseGlobal,
   shouldPauseWorker,
@@ -162,15 +161,12 @@ describe("双熔断隔离（全局派发异常 vs 单 worker 未领取超时）"
     expect(shouldDispatch({ ...base, paused: false }).ok).toBe(true)
   })
 
-  test("未领取超时退避复用同一曲线（仅 streak 语义不同）", () => {
-    expect(nextTimeoutBackoffMs(0)).toBe(0)
-    expect(nextTimeoutBackoffMs(1)).toBe(nextBackoffMs(1))
-    expect(nextTimeoutBackoffMs(2)).toBe(nextBackoffMs(2))
-    expect(nextTimeoutBackoffMs(20)).toBe(DISPATCH_CAPS.backoffCapMs)
+  test("退避曲线边界:0 → 0;streak=20 封顶 backoffCapMs（超时/全局共用唯一曲线）", () => {
+    expect(nextBackoffMs(0)).toBe(0)
+    expect(nextBackoffMs(20)).toBe(DISPATCH_CAPS.backoffCapMs)
   })
 
-  test("超时退避可注入更短基数（接线/测试）", () => {
-    expect(nextTimeoutBackoffMs(1, 10)).toBe(10)
+  test("退避基数可注入更短值（接线/测试）", () => {
     expect(nextBackoffMs(1, 10)).toBe(10)
   })
 })

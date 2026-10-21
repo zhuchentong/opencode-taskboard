@@ -5,6 +5,7 @@ import { dirname, join } from "node:path"
 import { createStore, memoryBackend } from "../src/store"
 import { createServer, type ServerHandle } from "../src/server"
 import { DEFAULT_PROJECT_ID, type Store } from "../src/types"
+import { SseReader } from "./helpers/sse-reader"
 
 const FIXDIR = "test/.webroot-fixture"
 
@@ -180,6 +181,33 @@ describe("REST API", () => {
     const base = await setup(s, { onWrite: () => calls++ })
     await fetch(`${base}/api/tasks`, { method: "POST", headers: H, body: JSON.stringify({ title: "t" }) })
     await new Promise((r) => setTimeout(r, 10))
+    expect(calls).toBe(1)
+  })
+
+  test("emitSnapshot(notifyOnWrite=false) 只推 SSE 不触发 onWrite（store 直写路径防评估回环）；快照含 projects", async () => {
+    const s = createStore(memoryBackend(), { requireAnalysisConfirm: false })
+    let calls = 0
+    const base = await setup(s, { onWrite: () => calls++ })
+    const handle = started[started.length - 1]
+
+    const res = await fetch(`${base}/api/events`)
+    const reader = new SseReader<{ type: string; projects?: unknown[] }>(res)
+    await reader.nextEvent() // hello
+    await reader.nextEvent() // 建连初始 snapshot（该快照默认 notify，onWrite 已触发一次）
+    await new Promise((r) => setTimeout(r, 20))
+    calls = 0 // 基准归零:以下只观察 emitSnapshot 显式调用的效果
+
+    await handle.emitSnapshot(false)
+    const snap = await reader.nextEvent()
+    expect(snap.type).toBe("snapshot")
+    // 回归守护：快照装配统一在服务端，projects 必须在场（派发器消耗广播曾因手拼快照漏掉此字段）
+    expect(Array.isArray(snap.projects)).toBe(true)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(calls).toBe(0)
+
+    await handle.emitSnapshot(true)
+    await reader.nextEvent() // snapshot
+    await new Promise((r) => setTimeout(r, 20))
     expect(calls).toBe(1)
   })
 

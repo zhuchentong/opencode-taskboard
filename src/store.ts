@@ -72,6 +72,13 @@ const CONFIRM_FROM: Record<"confirm" | "reject" | "comment", ReadonlySet<Status>
   comment: new Set<Status>(["planning", "pending", "analyzing", "analysis_confirm", "executing", "completion_confirm", "done"]),
 }
 
+/** 最旧优先选任务:createdAt 升序,同刻按 id 字典序稳定 tie-break(store.claim 与派发引擎共用) */
+export function selectOldestPending(tasks: Task[]): Task | undefined {
+  return tasks
+    .filter((t) => t.status === "pending")
+    .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))[0]
+}
+
 export interface Store {
   list(): Promise<Task[]>
   get(id: string): Promise<Task>
@@ -323,12 +330,9 @@ export function createStore(
           }
         } else {
           const entries = await backend.scan(TASK_PREFIX)
-          const pendings = entries
-            .map((e) => e.value as Task)
-            .filter((t) => t.status === "pending")
-            .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))
-          if (pendings.length === 0) throw new StoreError("no_pending", "当前没有待领取的任务")
-          target = pendings[0]
+          const oldest = selectOldestPending(entries.map((e) => e.value as Task))
+          if (!oldest) throw new StoreError("no_pending", "当前没有待领取的任务")
+          target = oldest
         }
         const next: Task = {
           ...target,

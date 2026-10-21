@@ -4,7 +4,6 @@ import {
   DISPATCH_CAPS,
   GUARDS,
   nextBackoffMs,
-  nextTimeoutBackoffMs,
   shouldDispatch,
   shouldPauseGlobal,
   shouldPauseWorker,
@@ -88,10 +87,6 @@ describe("退避曲线冒烟(全矩阵见 test/dispatcher.test.ts)", () => {
     expect(nextBackoffMs(0)).toBe(0)
     expect(nextBackoffMs(1)).toBe(60_000)
     expect(nextBackoffMs(20)).toBe(DISPATCH_CAPS.backoffCapMs)
-  })
-
-  test("超时退避复用同一曲线", () => {
-    expect(nextTimeoutBackoffMs(3)).toBe(nextBackoffMs(3))
   })
 
   test("双熔断阈值独立且都为 3", () => {

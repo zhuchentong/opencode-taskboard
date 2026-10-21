@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createStore, memoryBackend, storageBackend } from "../src/store"
+import { createStore, memoryBackend, selectOldestPending, storageBackend } from "../src/store"
 import { StoreError, type Status, type Store, type Task, type TaskUsage } from "../src/types"
 
 const S = (requireAnalysisConfirm = false) => createStore(memoryBackend(), { requireAnalysisConfirm })
@@ -625,5 +625,27 @@ describe("设置:阶段模型字段", () => {
       msg = (e as Error).message
     }
     expect(msg).toContain("必须为字符串")
+  })
+})
+
+describe("selectOldestPending(claim 与派发引擎共用的最旧优先选择)", () => {
+  const mk = (id: string, createdAt: number, status: Task["status"] = "pending"): Task => ({
+    id,
+    title: `t-${id}`,
+    description: "",
+    status,
+    comments: [],
+    createdAt,
+    updatedAt: createdAt,
+  })
+
+  test("只认 pending,createdAt 升序;同刻按 id 字典序稳定 tie-break;空 → undefined", () => {
+    expect(selectOldestPending([])).toBeUndefined()
+    const a = mk("a", 100)
+    const b = mk("b", 100)
+    const older = mk("c", 50)
+    const done = mk("d", 10, "done")
+    expect(selectOldestPending([a, b, older, done])).toBe(older)
+    expect(selectOldestPending([b, a])).toBe(a)
   })
 })

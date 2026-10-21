@@ -13,6 +13,13 @@ export interface ServerHandle {
   actualPort: number
   stop(): void
   emit(event: ServerEvent): void
+  /**
+   * 广播全量快照（tasks + settings + projects，唯一事实源）。
+   * notifyOnWrite=false 时只推 SSE、不触发 onWrite 观察者——供 store 层直写路径
+   * （如派发器消耗回写）使用：直写不经 HTTP 路由，若再触发 onWrite 会形成
+   * 评估回环（recordUsage → broadcast → onWrite → evaluate → flushTerminal → …）。
+   */
+  emitSnapshot(notifyOnWrite?: boolean): Promise<void>
 }
 
 const SSE_HEARTBEAT_MS = 25_000
@@ -185,7 +192,7 @@ export function createServer(
     }
   }
 
-  async function emitSnapshot(): Promise<void> {
+  async function emitSnapshot(notifyOnWrite = true): Promise<void> {
     const tasks = await store.list()
     emit({
       type: "snapshot",
@@ -193,7 +200,7 @@ export function createServer(
       settings: await store.getSettings(),
       projects: await store.listProjects(),
     })
-    if (opts.onWrite) setTimeout(() => opts.onWrite(tasks), 0)
+    if (notifyOnWrite && opts.onWrite) setTimeout(() => opts.onWrite(tasks), 0)
   }
 
   function handleEvents(req: Request): Response {
@@ -499,5 +506,6 @@ export function createServer(
     actualPort: server.port,
     stop: () => server.stop(true),
     emit,
+    emitSnapshot,
   }
 }

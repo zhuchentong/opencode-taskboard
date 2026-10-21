@@ -5,6 +5,7 @@ import { registerTools } from "./tools"
 import { registerCommands } from "./commands"
 import { clientStore } from "./client"
 import { initDispatcher, DISPATCH_CAPS } from "./dispatcher"
+import { parseModelRef } from "./dispatcher/model"
 import { createTerminalBridge, type TerminalBridge } from "./terminal"
 import type { Task } from "./types"
 
@@ -266,7 +267,7 @@ export async function arbitrate(opts: {
       return { handle: h, store: opts.localStore, primary: true, primaryPort: p }
     }
     const hp = await probeHealth(p)
-    if (hp?.ok === true && hp.primary === true && hp.projectID === opts.projectID) {
+    if (shouldProxy(hp, opts.projectID) && hp?.primary === true) {
       opts.log(`端口 ${p} 发现同项目主实例（上移端口），降级为次要实例`)
       return bindSecondary(p)
     }
@@ -358,17 +359,8 @@ export default Plugin.define({
       // 必须显式指定。来源:环境变量 TASKBOARD_MODEL(推荐,daemon 环境继承)> opencode.json 的 plugin.taskboard.model。
       const pluginOptions = (rawOpts as { plugin?: { taskboard?: { model?: string } } }).plugin?.taskboard
       const taskboardModelSpec = process.env.TASKBOARD_MODEL ?? pluginOptions?.model ?? (rawOpts as { model?: string }).model
-      const taskboardModel = taskboardModelSpec
-        ? (() => {
-            const idx = taskboardModelSpec.indexOf("/")
-            return idx > 0
-              ? {
-                  providerID: taskboardModelSpec.slice(0, idx),
-                  id: taskboardModelSpec.slice(idx + 1),
-                }
-              : undefined
-          })()
-        : undefined
+      // 与派发侧 parseModelRef 同一口径（拒绝 a/b/c、空段等非法格式），非法即视为未配置
+      const taskboardModel = parseModelRef(taskboardModelSpec) ?? undefined
       if (taskboardModelSpec && !taskboardModel) log(`TASKBOARD model 配置格式错误(应为 provider/model):${taskboardModelSpec}`)
       log(`插件 options: ${JSON.stringify(rawOpts)} | worker model: ${taskboardModel ? taskboardModelSpec : "未配置(用 opencode 默认解析,已知会挂起)"}`)
 
@@ -388,15 +380,10 @@ export default Plugin.define({
             store: arb.store,
             log,
             onWrite: (fn) => (hooks.onWrite = fn),
-            // recordUsage 走 store 层、不经 HTTP 路由，故 emitSnapshot 不会触发；
-            // 消耗统计要上看板必须由这里显式广播快照
-            broadcast: async () => {
-              await arb.handle.emit({
-                type: "snapshot",
-                tasks: await arb.store.list(),
-                settings: await arb.store.getSettings(),
-              })
-            },
+            // recordUsage 走 store 层、不经 HTTP 路由，故 emitSnapshot 不会自动触发；
+            // 消耗统计要上看板必须由这里显式广播。统一走服务端的快照装配
+            //（补齐手拼版曾漏掉的 projects 字段）；notify=false 防评估回环。
+            broadcast: () => arb.handle.emitSnapshot(false),
           },
         )
       }

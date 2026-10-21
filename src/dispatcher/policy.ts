@@ -105,12 +105,9 @@ export function nextBackoffMs(streak: number, baseMs: number = DISPATCH_CAPS.bac
 }
 
 /**
- * 未领取超时的退避(语义更清楚的名字):曲线与 nextBackoffMs 完全一致,
- * 但入参 timeoutStreak 是**按任务独立**的连败数,与全局派发异常 streak 互不影响。
+ * 未领取超时的退避:调用方(engine 的 onTimeout)直接用 nextBackoffMs —— 曲线唯一,
+ * 「按任务独立计数」的语义由调用处的 streak 来源保证,不再维护纯别名函数。
  */
-export function nextTimeoutBackoffMs(timeoutStreak: number, baseMs?: number): number {
-  return nextBackoffMs(timeoutStreak, baseMs)
-}
 
 /** 建会话失败的独立退避:曲线同源,封顶 createFailCapMs(5 分钟),不拖累全局熔断 */
 export function nextCreateFailBackoffMs(streak: number, baseMs: number = DISPATCH_CAPS.backoffBaseMs): number {

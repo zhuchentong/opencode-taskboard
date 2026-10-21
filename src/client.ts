@@ -47,7 +47,7 @@ export function clientStore(base: string, token: string, opts?: { timeoutMs?: nu
       return call<Task>(`/api/tasks/${encodeURIComponent(id)}`)
     },
     async create(input) {
-      return call<Task>("/api/tasks", { method: "POST", body: JSON.stringify(input) })
+      return post("/api/tasks", input)
     },
     async remove(id) {
       await call<{ ok: boolean }>(`/api/tasks/${encodeURIComponent(id)}`, { method: "DELETE" })

@@ -14,7 +14,7 @@
  * along-state blob 持久化(lastSeen/lastActedSeq/taskBackoff/seqCounter)。
  */
 
-import type { Store } from "../store"
+import { selectOldestPending, type Store } from "../store"
 import { DEFAULT_PROJECT_ID, StoreError } from "../types"
 import type { Task } from "../types"
 import { makeBuiltinRules, runAdvance } from "./advance"
@@ -25,9 +25,9 @@ import {
   DISPATCH_CAPS,
   nextBackoffMs,
   nextCreateFailBackoffMs,
-  nextTimeoutBackoffMs,
   shouldDispatch,
   shouldPauseGlobal,
+  shouldPauseWorker,
 } from "./policy"
 import { buildDispatchPrompt } from "./prompt"
 import { createSessionPool } from "./session-pool"
@@ -161,6 +161,15 @@ export function initDispatcher(
     todayCount = Number(await ctx.storage.get(dailyKey())) || 0
   }
 
+  /** 任务已删除:清四键沿状态并记账(防 blob 随历史任务单调膨胀);onTaskGone 与 evaluate 差集清理共用 */
+  const cleanupTaskState = (taskID: string): void => {
+    maps.lastSeen.delete(taskID)
+    maps.lastActedSeq.delete(taskID)
+    maps.rounds.delete(taskID)
+    maps.taskBackoff.delete(taskID)
+    deps.log(`任务已删除,沿状态键已清理 task=${taskID}`)
+  }
+
   const pool = createSessionPool({
     session: ctx.session,
     directory: ctx.directory,
@@ -181,11 +190,10 @@ export function initDispatcher(
     onTimeout: (taskID) => {
       const prev = maps.taskBackoff.get(taskID) ?? { timeoutStreak: 0, cooldownUntil: 0 }
       const streak = prev.timeoutStreak + 1
-      const ms = nextTimeoutBackoffMs(streak, backoffBaseMs)
+      const ms = nextBackoffMs(streak, backoffBaseMs)
       maps.taskBackoff.set(taskID, { timeoutStreak: streak, cooldownUntil: Date.now() + ms })
       timeoutStreak++ // 全局观测口径
-      const pause =
-        streak >= DISPATCH_CAPS.timeoutPause ? ";超时连败达上限,延长冷却" : ""
+      const pause = shouldPauseWorker(streak) ? ";超时连败达上限,延长冷却" : ""
       deps.log(
         `派发超时未见领取（该任务第 ${streak} 连败）task=${taskID}；任务冷却 ${Math.round(ms / 1000)}s${pause}`,
       )
@@ -201,12 +209,8 @@ export function initDispatcher(
       )
     },
     onTaskGone: (taskID) => {
-      maps.lastSeen.delete(taskID)
-      maps.lastActedSeq.delete(taskID)
-      maps.rounds.delete(taskID)
-      maps.taskBackoff.delete(taskID)
+      cleanupTaskState(taskID)
       persist()
-      deps.log(`任务已删除,沿状态键已清理 task=${taskID}`)
     },
     log: deps.log,
   })
@@ -329,12 +333,8 @@ export function initDispatcher(
     let goneAny = false
     for (const id of [...maps.lastSeen.keys()]) {
       if (!liveIDs.has(id)) {
-        maps.lastSeen.delete(id)
-        maps.lastActedSeq.delete(id)
-        maps.rounds.delete(id)
-        maps.taskBackoff.delete(id)
+        cleanupTaskState(id)
         goneAny = true
-        deps.log(`任务已删除,沿状态键已清理 task=${id}`)
       }
     }
     if (goneAny) persist()
@@ -354,14 +354,12 @@ export function initDispatcher(
     lastKnownActive = active
     const pendingTotal = tasks.filter((t) => t.status === "pending").length
     const nowMs = Date.now()
-    const pending = tasks
-      .filter(
-        (t) =>
-          t.status === "pending" &&
-          !inFlightIDs.has(t.id) &&
-          (maps.taskBackoff.get(t.id)?.cooldownUntil ?? 0) <= nowMs,
-      )
-      .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1))
+    const pending = tasks.filter(
+      (t) =>
+        t.status === "pending" &&
+        !inFlightIDs.has(t.id) &&
+        (maps.taskBackoff.get(t.id)?.cooldownUntil ?? 0) <= nowMs,
+    )
 
     const v = shouldDispatch(
       {
@@ -404,26 +402,19 @@ export function initDispatcher(
       return
     }
     // pending 已剔除冷却中与在途任务；若为空（全部待领取任务均在任务冷却或已在途），
-    // 不可派遣 pending[0]（undefined 会崩溃），记日志后等下一轮（冷却到期会自然恢复）。
+    // 不可强行派发（undefined 会崩溃），记日志后等下一轮（冷却到期会自然恢复）。
     // lastSkipReason 不应在此被误清为 ""：pendingTotal>0 说明看板上仍有待领取任务，
     // 只是暂时不可立即派发，需如实反映跳过原因，避免前端/命令显示"空闲"的误导。
-    if (pending.length === 0) {
+    const frontier = selectOldestPending(pending)
+    if (!frontier) {
       deps.log("无可立即派发的待领取任务：全部在任务冷却中或已在途派发")
       lastSkipReason = pendingTotal > 0 ? "cooldown" : ""
       return
     }
     lastSkipReason = ""
     // 一轮至多派发一个;还剩空槽由 dispatch 完成的 requestInternal 排空续接
-    await dispatchFrontier(pending[0])
+    await dispatchFrontier(frontier)
   }
-
-  // 环境自举:启动后自动评估一次,处理存量待领取任务(无需外部写事件触发)。
-  // 仅在存在待领取任务时才评估,避免空看板启动时记录"empty"跳过并污染 lastSkipReason。
-  // evaluate 内部已 await loaded,沿状态就绪后才会真正执行派发决策。
-  void (async () => {
-    const startupPending = (await deps.store.list()).some((t) => t.status === "pending")
-    if (startupPending) void evaluate()
-  })()
 
   const trigger = createTrigger({
     evaluate,
