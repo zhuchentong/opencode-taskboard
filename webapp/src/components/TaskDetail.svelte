@@ -28,8 +28,8 @@
     /** 项目索引表(详情头显示归属;缺省不显示) */
     projMap?: Map<string, Project>
     onclose: () => void
-    /** 统一写通道：onwrite(taskId, 乐观遮罩, API patch, 失败提示前缀) */
-    onwrite: (taskId: string, mask: Partial<Task>, apiPatch: Record<string, unknown>, failMsg: string) => void
+    /** 统一写通道：onwrite(taskId, 乐观遮罩, API patch, 失败提示前缀)；resolve true=写入成功 */
+    onwrite: (taskId: string, mask: Partial<Task>, apiPatch: Record<string, unknown>, failMsg: string) => Promise<boolean>
     ondelete: (taskId: string) => void
     /** 打开时直接展开打回表单（卡片快速打回入口） */
     initialReject?: boolean
@@ -97,9 +97,11 @@
     if (v !== task.description) onwrite(task.id, { description: v }, { description: v }, "保存失败")
   }
 
-  function confirm() {
+  async function confirm() {
     const nextStatus = task.status === "analysis_confirm" ? "executing" : "done"
-    onwrite(task.id, { status: nextStatus }, { action: "confirm" }, "确认失败")
+    // 写入成功才自动关弹窗（与 removeTask 同模式）；失败保持打开 + toast 报错，可直接重试
+    const ok = await onwrite(task.id, { status: nextStatus }, { action: "confirm" }, "确认失败")
+    if (ok) onclose()
   }
 
   function reject() {

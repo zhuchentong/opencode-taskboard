@@ -83,17 +83,19 @@
     apiPatch: Record<string, unknown>,
     failMsg: string,
     silent = false,
-  ) {
+  ): Promise<boolean> {
     board = beginOptimistic(board, taskId, mask)
-    patchTask(taskId, apiPatch)
+    return patchTask(taskId, apiPatch)
       .then(async () => {
         await refresh()
         board = settle(board, taskId, true)
+        return true
       })
       .catch((e) => {
         board = settle(board, taskId, false)
         flashFail(taskId)
         if (!silent) notify("error", `${failMsg}：${friendlyError(e)}`)
+        return false
       })
   }
 
