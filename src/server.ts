@@ -3,6 +3,7 @@ import { statSync } from "node:fs"
 import { readdir, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { StoreError } from "./types"
+import { SSE_HEARTBEAT_MS, MAX_SSE_SUBSCRIBERS, FS_LIST_CAP } from "./constants"
 import type { BoardSettings, Project, Store, Task } from "./types"
 import type { TerminalBridge } from "./terminal"
 
@@ -21,11 +22,6 @@ export interface ServerHandle {
    */
   emitSnapshot(notifyOnWrite?: boolean): Promise<void>
 }
-
-const SSE_HEARTBEAT_MS = 25_000
-const MAX_SSE_SUBSCRIBERS = 32
-/** 目录列表条目上限：超大目录（如 /usr）只回前 N 项，防选择器渲染卡死 */
-const FS_LIST_CAP = 500
 
 type Subscriber = {
   controller: ReadableStreamDefaultController<Uint8Array>

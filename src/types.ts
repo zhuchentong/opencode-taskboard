@@ -1,3 +1,5 @@
+// ⚠️ 本文件的纯数据类型在 webapp/src/lib/types.ts 有一份手工维护的前端副本：
+// 修改字段/结构时必须双向同步（前端无法跨包 import 服务端源码），否则 SSE 快照解析静默漂移。
 export type Status =
   | "planning"
   | "pending"
@@ -6,6 +8,17 @@ export type Status =
   | "executing"
   | "completion_confirm"
   | "done"
+
+/** 七阶段全序（单一来源）：工具 schema、状态过滤等需要状态清单处一律引用本常量 */
+export const STATUSES = [
+  "planning",
+  "pending",
+  "analyzing",
+  "analysis_confirm",
+  "executing",
+  "completion_confirm",
+  "done",
+] as const satisfies readonly Status[]
 
 export interface TaskComment {
   author: string
@@ -53,6 +66,18 @@ export interface TaskUsage {
 }
 
 export const DEFAULT_PROJECT_ID = "project_default"
+
+/** 任务的所属项目（读取形归一）：缺省/空 → 默认项目。engine 与 store 共用 */
+export function projectIdOf(task: { projectId?: string }): string {
+  return task.projectId ?? DEFAULT_PROJECT_ID
+}
+
+/** 任务的所属项目（对象复制形归一）：返回补齐 projectId 的新对象，原对象不动。
+ * 已有 projectId 时原样返回（与旧 store 内联写法逐字同语义，不引入多余复制）。 */
+export function withDefaultProject<T extends { projectId?: string }>(task: T): T & { projectId: string } {
+  if (task.projectId) return task as T & { projectId: string }
+  return { ...task, projectId: DEFAULT_PROJECT_ID }
+}
 
 /**
  * 看板「项目」:用户可管理的任务分组,自带 worker 工作区目录。

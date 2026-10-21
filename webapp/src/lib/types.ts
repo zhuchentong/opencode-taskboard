@@ -1,4 +1,7 @@
-// 前端类型副本：与 src/types.ts 字段保持一致（重构期间手动同步）
+// 前端类型副本：与 src/types.ts 逐字段保持一致。
+// ⚠️ 双向同步纪律：修改任一侧的字段/结构，必须同步另一侧，否则 SSE 快照解析会静默漂移。
+// 本文件是手工筛选子集（无 StoreError/TaskPatch 等服务端运行时代码）；
+// 改动后必须 `bun run build:web` 并提交 src/web/ 产物。
 export type Status =
   | "planning"
   | "pending"

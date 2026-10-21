@@ -14,9 +14,9 @@
  * along-state blob 持久化(lastSeen/lastActedSeq/taskBackoff/seqCounter)。
  */
 
+import { DISPATCHER_ALONG_SUFFIX } from "../constants"
 import { selectOldestPending, type Store } from "../store"
-import { DEFAULT_PROJECT_ID, StoreError } from "../types"
-import type { Task } from "../types"
+import { DEFAULT_PROJECT_ID, StoreError, projectIdOf, type Task } from "../types"
 import { makeBuiltinRules, runAdvance } from "./advance"
 import { resolvePhaseModel, type CreateModelRef } from "./model"
 import { createMetrics } from "./metrics"
@@ -39,6 +39,7 @@ import {
   shouldAct as alongShouldAct,
   toMaps,
   type AlongMaps,
+  type TaskTransition,
 } from "./state"
 import { createTrigger } from "./trigger"
 import type {
@@ -47,8 +48,6 @@ import type {
   DispatcherStatus,
   GlobalPhase,
 } from "./types"
-
-const ALONG_KEY_SUFFIX = "/dispatcher/along-state"
 
 export function initDispatcher(
   ctx: {
@@ -87,7 +86,7 @@ export function initDispatcher(
   const backoffBaseMs = deps.backoffBaseMs ?? DISPATCH_CAPS.backoffBaseMs
 
   /* ---- 沿状态:装载(签名保持同步;evaluate/沿处理入口 await 装载完成,规格 §3.3 约束 2) ---- */
-  const alongKey = `${ctx.projectID}${ALONG_KEY_SUFFIX}`
+  const alongKey = `${ctx.projectID}${DISPATCHER_ALONG_SUFFIX}`
   let maps: AlongMaps = toMaps(loadAlongState(undefined))
   const loaded = (async () => {
     maps = toMaps(loadAlongState(await loadRaw(alongKey)))
@@ -181,7 +180,7 @@ export function initDispatcher(
       if (cur.status !== "pending") {
         throw new StoreError("invalid_transition", `任务状态为 ${cur.status},仅待领取任务可超时撤回`)
       }
-      return deps.store.patch(id, patch)
+      await deps.store.patch(id, patch)
     },
     onSettled: () => {
       timeoutStreak = 0 // 领取成功:全局超时观测归零(任务级 streak 不受影响)
@@ -260,7 +259,7 @@ export function initDispatcher(
     // 项目查询失败(键残留/外部改动,理论不可达——活跃任务禁删项目)→ 双保险回退 + 警示。
     let directory: string | undefined
     let project: { name: string; workspace: string } | undefined
-    const pid = task.projectId ?? DEFAULT_PROJECT_ID
+    const pid = projectIdOf(task)
     if (pid !== DEFAULT_PROJECT_ID) {
       try {
         const p = await deps.store.getProject(pid)

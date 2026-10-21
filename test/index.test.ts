@@ -1,7 +1,8 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test"
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
 import { join } from "node:path"
-import { shouldProxy, safeRegister, arbitrate, listModels, stripJsonComments, providerAllowedByPolicies } from "../src/index"
+import { shouldProxy, safeRegister, arbitrate } from "../src/index"
+import { listModels, stripJsonComments, providerAllowedByPolicies } from "../src/models"
 import { createStore, memoryBackend } from "../src/store"
 
 describe("shouldProxy（端口仲裁：仅同项目主实例才降级为次要实例）", () => {

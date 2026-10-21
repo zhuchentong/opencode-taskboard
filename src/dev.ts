@@ -2,6 +2,7 @@
 // 用法：bun run src/dev.ts → http://127.0.0.1:4370/（token 固定为 dev）
 import { createStore, memoryBackend } from "./store"
 import { createServer } from "./server"
+import { BASE_PORT_DEFAULT } from "./constants"
 
 const store = createStore(memoryBackend(), { requireAnalysisConfirm: false, directory: process.cwd() })
 
@@ -15,7 +16,7 @@ await store.patch(done.id, { status: "pending" })
 await store.patch(done.id, { status: "done" })
 
 const handle = createServer(store, {
-  port: Number(process.env.TASKBOARD_PORT) || 4370,
+  port: Number(process.env.TASKBOARD_PORT) || BASE_PORT_DEFAULT,
   token: "dev",
   webDir: new URL("./web/", import.meta.url).pathname,
   primary: true,

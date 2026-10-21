@@ -1,5 +1,6 @@
 import { transitionSpans } from "./spans"
-import { DEFAULT_PROJECT_ID, StoreError, type BoardSettings, type Project, type Status, type Task, type TaskPatch, type TaskUsage } from "./types"
+import { SETTINGS_KEY, TASK_PREFIX, PROJECT_PREFIX } from "./constants"
+import { DEFAULT_PROJECT_ID, StoreError, projectIdOf, withDefaultProject, type BoardSettings, type Project, type Status, type Task, type TaskPatch, type TaskUsage } from "./types"
 
 export interface KVBackend {
   get(key: string): Promise<unknown | undefined>
@@ -62,9 +63,6 @@ export function storageBackend(storage: CtxStorageLike, keyPrefix: string): KVBa
   }
 }
 
-const TASK_PREFIX = "task/"
-const PROJECT_PREFIX = "project/"
-const SETTINGS_KEY = "settings/board"
 const CLAIM_STATES: ReadonlySet<Status> = new Set(["analyzing", "executing"])
 const CONFIRM_FROM: Record<"confirm" | "reject" | "comment", ReadonlySet<Status>> = {
   confirm: new Set<Status>(["analysis_confirm", "completion_confirm"]),
@@ -192,20 +190,72 @@ export function createStore(
     }
   }
 
+  /** patch 的确认/打回/评论动作：校验源状态后原地修改 next（confirm 放行 / reject 打回 / comment 追加评论） */
+  const applyConfirmAction = (
+    action: "confirm" | "reject" | "comment",
+    p: TaskPatch,
+    task: Task,
+    next: Task,
+    now: number,
+  ): void => {
+    if (!CONFIRM_FROM[action].has(task.status)) {
+      throw new StoreError("invalid_transition", `当前状态 ${task.status} 不能执行 ${action}`)
+    }
+    if (action === "confirm") {
+      next.status = task.status === "analysis_confirm" ? "executing" : "done"
+    } else if (action === "comment") {
+      const comment = (p.comment ?? "").trim()
+      if (!comment) throw new StoreError("comment_required", "评论内容不能为空")
+      next.comments.push({ author: "user", text: comment, createdAt: now })
+    } else {
+      const comment = (p.comment ?? "").trim()
+      if (!comment) throw new StoreError("comment_required", "打回必须附评论")
+      next.status = "pending"
+      next.claim = undefined
+      next.comments.push({ author: "user", text: comment, createdAt: now })
+    }
+  }
+
+  /** patch 的人工拖拽流转：设置新状态并维护 human claim（spec §5.4） */
+  const applyDragStatus = (p: TaskPatch, task: Task, next: Task, now: number): void => {
+    next.status = p.status as Status
+    applyDragClaim(task, next, now)
+  }
+
   const newId = () => `task_${crypto.randomUUID().slice(0, 8)}`
+
+  /** 状态转移样板收敛：读任务 → 源状态/归属校验 → mutate 构造 next → 两段计时与更新时间 → 落盘。
+   * analyze/complete/release 共用；claim（写 claim、含无 id 分支）与 patch（多分支）不套此模板。 */
+  const transitionTask = async (
+    id: string,
+    gate: { expect: ReadonlySet<Status>; denied: (status: Status) => string; sessionID?: string },
+    mutate: (task: Task, now: number) => Task | Promise<Task>,
+  ): Promise<Task> =>
+    serialized(async () => {
+      const task = await readTask(id)
+      if (!gate.expect.has(task.status)) {
+        throw new StoreError("invalid_transition", gate.denied(task.status))
+      }
+      if (gate.sessionID !== undefined) requireOwned(task, gate.sessionID)
+      const now = Date.now()
+      const next = await mutate(task, now)
+      transitionSpans(task, next, now)
+      next.updatedAt = now
+      await backend.set(TASK_PREFIX + next.id, next)
+      return next
+    })
 
   const store: Store = {
     async list() {
       const entries = await backend.scan(TASK_PREFIX)
       return entries
         .map((e) => e.value as Task)
-        .map((t) => (t.projectId ? t : { ...t, projectId: DEFAULT_PROJECT_ID }))
+        .map(withDefaultProject)
         .sort((a, b) => b.updatedAt - a.updatedAt)
     },
 
     async get(id) {
-      const t = await readTask(id)
-      return t.projectId ? t : { ...t, projectId: DEFAULT_PROJECT_ID }
+      return withDefaultProject(await readTask(id))
     },
 
     create(input) {
@@ -250,26 +300,10 @@ export function createStore(
           throw new StoreError("invalid_input", `未知操作：${String(p.action)}`)
         }
 
-        if (p.action === "confirm" || p.action === "reject" || p.action === "comment") {
-          if (!CONFIRM_FROM[p.action].has(task.status)) {
-            throw new StoreError("invalid_transition", `当前状态 ${task.status} 不能执行 ${p.action}`)
-          }
-          if (p.action === "confirm") {
-            next.status = task.status === "analysis_confirm" ? "executing" : "done"
-          } else if (p.action === "comment") {
-            const comment = (p.comment ?? "").trim()
-            if (!comment) throw new StoreError("comment_required", "评论内容不能为空")
-            next.comments.push({ author: "user", text: comment, createdAt: now })
-          } else {
-            const comment = (p.comment ?? "").trim()
-            if (!comment) throw new StoreError("comment_required", "打回必须附评论")
-            next.status = "pending"
-            next.claim = undefined
-            next.comments.push({ author: "user", text: comment, createdAt: now })
-          }
+        if (p.action !== undefined) {
+          applyConfirmAction(p.action, p, task, next, now)
         } else if (p.status !== undefined) {
-          next.status = p.status
-          applyDragClaim(task, next, now)
+          applyDragStatus(p, task, next, now)
         }
 
         if (p.title !== undefined) {
@@ -347,57 +381,50 @@ export function createStore(
     },
 
     analyze(input) {
-      return serialized(async () => {
-        const task = await readTask(input.id)
-        if (task.status !== "analyzing") {
-          throw new StoreError("invalid_transition", `任务状态为 ${task.status}，仅分析中任务可提交分析`)
-        }
-        requireOwned(task, input.sessionID)
-        const settings = await readSettings()
-        const now = Date.now()
-        const next: Task = {
-          ...task,
-          analysis: input.analysis,
-          status: settings.requireAnalysisConfirm ? "analysis_confirm" : "executing",
-        }
-        transitionSpans(task, next, now)
-        next.updatedAt = now
-        await backend.set(TASK_PREFIX + next.id, next)
-        return next
-      })
+      return transitionTask(
+        input.id,
+        {
+          expect: new Set<Status>(["analyzing"]),
+          denied: (s) => `任务状态为 ${s}，仅分析中任务可提交分析`,
+          sessionID: input.sessionID,
+        },
+        async (task) => {
+          const settings = await readSettings()
+          return {
+            ...task,
+            analysis: input.analysis,
+            status: settings.requireAnalysisConfirm ? "analysis_confirm" : "executing",
+          }
+        },
+      )
     },
 
     complete(input) {
-      return serialized(async () => {
-        const task = await readTask(input.id)
-        if (task.status !== "executing") {
-          throw new StoreError("invalid_transition", `任务状态为 ${task.status}，仅执行中任务可提交完成`)
-        }
-        requireOwned(task, input.sessionID)
-        const now = Date.now()
-        const next: Task = { ...task, status: "completion_confirm" }
-        if (input.result !== undefined) next.result = input.result
-        transitionSpans(task, next, now)
-        next.updatedAt = now
-        await backend.set(TASK_PREFIX + next.id, next)
-        return next
-      })
+      return transitionTask(
+        input.id,
+        {
+          expect: new Set<Status>(["executing"]),
+          denied: (s) => `任务状态为 ${s}，仅执行中任务可提交完成`,
+          sessionID: input.sessionID,
+        },
+        (task) => {
+          const next: Task = { ...task, status: "completion_confirm" }
+          if (input.result !== undefined) next.result = input.result
+          return next
+        },
+      )
     },
 
     release(input) {
-      return serialized(async () => {
-        const task = await readTask(input.id)
-        if (!CLAIM_STATES.has(task.status)) {
-          throw new StoreError("invalid_transition", `任务状态为 ${task.status}，仅分析中/执行中任务可放弃`)
-        }
-        requireOwned(task, input.sessionID)
-        const now = Date.now()
-        const next: Task = { ...task, status: "pending", claim: undefined }
-        transitionSpans(task, next, now) // 回到待领取 = 新一轮，计时整体清空
-        next.updatedAt = now
-        await backend.set(TASK_PREFIX + next.id, next)
-        return next
-      })
+      return transitionTask(
+        input.id,
+        {
+          expect: CLAIM_STATES,
+          denied: (s) => `任务状态为 ${s}，仅分析中/执行中任务可放弃`,
+          sessionID: input.sessionID,
+        },
+        (task) => ({ ...task, status: "pending", claim: undefined }), // 回到待领取 = 新一轮，计时整体清空
+      )
     },
 
     updateNotes(input) {
@@ -480,7 +507,7 @@ export function createStore(
         const entries = await backend.scan(TASK_PREFIX)
         const owned = entries
           .map((e) => e.value as Task)
-          .filter((t) => (t.projectId ?? DEFAULT_PROJECT_ID) === id)
+          .filter((t) => projectIdOf(t) === id)
         if (owned.some((t) => t.status !== "done")) {
           throw new StoreError("conflict", `项目下还有未完成任务，不能删除：${id}`)
         }

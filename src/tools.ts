@@ -1,4 +1,4 @@
-import type { StoreError, Task } from "./types"
+import { STATUSES, type StoreError, type Task } from "./types"
 import type { Store } from "./store"
 
 /** OpenCode 插件上下文中与工具注册相关的最小结构（避免耦合完整类型） */
@@ -26,7 +26,7 @@ const ID_PROPS = {
   additionalProperties: false,
 }
 
-const ID_STATUS_ENUM = ["planning", "pending", "analyzing", "analysis_confirm", "executing", "completion_confirm", "done"]
+const ID_STATUS_ENUM: string[] = [...STATUSES]
 
 /** 单工具注册样板：统一命名空间选项与 try/catch 错误文案；run 返回给 Agent 的正文 */
 function tool(
