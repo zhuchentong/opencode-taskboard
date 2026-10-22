@@ -9,7 +9,12 @@ async function toPending(s: Store, title: string): Promise<Task> {
   return s.patch(t.id, { status: "pending" })
 }
 
-function fakeSession() {
+function fakeSession(): DispatcherSession & {
+  // mock 观测字段(prompts/created/removed)不属于 DispatcherSession 契约,用交叉类型扩展
+  prompts: { sessionID: string; text: string }[]
+  created: { id: string; title?: string; directory?: string; model?: unknown }[]
+  removed: string[]
+} {
   const prompts: { sessionID: string; text: string }[] = []
   const created: { id: string; title?: string; directory?: string; model?: unknown }[] = []
   const removed: string[] = []
@@ -35,7 +40,7 @@ function fakeSession() {
       removed.push(_input.sessionID)
       return {}
     },
-  } satisfies DispatcherSession
+  }
   return sess
 }
 

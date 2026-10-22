@@ -20,6 +20,7 @@ const handle = createServer(store, {
   token: "dev",
   webDir: new URL("./web/", import.meta.url).pathname,
   primary: true,
+  projectID: "dev-project",
   logs: () => ["dev 模式运行中"],
 })
 

@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { createStore, memoryBackend } from "../src/store"
+import { createStore, memoryBackend, type Store } from "../src/store"
 import { createServer, type ServerEvent, type ServerHandle } from "../src/server"
-import type { Store } from "../src/types"
 import { SseReader } from "./helpers/sse-reader"
 
 const FIXDIR = "test/.webroot-fixture"

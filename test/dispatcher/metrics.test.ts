@@ -47,7 +47,9 @@ function harness(tokens?: unknown, usagePollMs = 0) {
   const metrics = createMetrics({
     store,
     session,
-    broadcast: async () => broadcasts.push(Date.now()),
+    broadcast: async () => {
+      broadcasts.push(Date.now())
+    },
     usagePollMs,
     log: (m) => lines.push(m),
   })

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { createStore, memoryBackend, selectOldestPending, storageBackend } from "../src/store"
-import { StoreError, type Status, type Store, type Task, type TaskUsage } from "../src/types"
+import { createStore, memoryBackend, selectOldestPending, storageBackend, type Store } from "../src/store"
+import { StoreError, type Status, type Task, type TaskUsage } from "../src/types"
 
 const S = (requireAnalysisConfirm = false) => createStore(memoryBackend(), { requireAnalysisConfirm })
 
@@ -379,6 +379,15 @@ describe("设置扩展与合并写入（autoDispatch）", () => {
       set: async (k: string, v: unknown) => {
         entries[k] = v
       },
+      remove: async (k: string) => {
+        delete entries[k]
+      },
+      // storageBackend 需要 scan：按前缀过滤内存 entries（与真实 storage 语义一致）
+      scan: async (opts: { prefix: string }) => ({
+        entries: Object.entries(entries)
+          .filter(([k]) => k.startsWith(opts.prefix))
+          .map(([key, value]) => ({ key, value })),
+      }),
     }
     const s = createStore(storageBackend(ctxStorage, "proj1/"), { requireAnalysisConfirm: false })
     await s.setSettings({ requireAnalysisConfirm: true, autoDispatch: true })
@@ -588,7 +597,8 @@ describe("pendingAt（排队计时起点）", () => {
     const t3 = await toStatus(s, await s.create({ title: "t3" }), "analysis_confirm")
     const back = await s.patch(t3.id, { action: "reject", comment: "重来" })
     expect(back.status).toBe("pending")
-    expect(back.pendingAt).toBeGreaterThan(first.pendingAt)
+    // 上一行已运行时断言 first.pendingAt > 0：非空断言仅收窄类型，不改运行时行为
+    expect(back.pendingAt).toBeGreaterThan(first.pendingAt!)
   })
 
   test("claim 离开 pending → 保留 pendingAt 作为历史", async () => {

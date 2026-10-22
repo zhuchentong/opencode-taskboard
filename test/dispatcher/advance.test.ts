@@ -14,6 +14,8 @@ const taskOf = (over: Partial<Task> = {}): Task => ({
   status: "executing",
   comments: [],
   claim: { sessionID: "ses_w1", agent: "build", claimedAt: 0 },
+  createdAt: 1,
+  updatedAt: 1,
   ...over,
 })
 

@@ -37,7 +37,8 @@ export function clientStore(base: string, token: string, opts?: { timeoutMs?: nu
     return body as T
   }
 
-  const post = (path: string, body: unknown) => call<Task>(path, { method: "POST", body: JSON.stringify(body) })
+  // post 泛型默认 Task：任务操作占多数；项目操作显式标注 <Project>
+  const post = <T = Task>(path: string, body: unknown) => call<T>(path, { method: "POST", body: JSON.stringify(body) })
 
   return {
     async list() {
@@ -96,8 +97,8 @@ export function clientStore(base: string, token: string, opts?: { timeoutMs?: nu
     async getProject(id) {
       return call<Project>(`/api/projects/${encodeURIComponent(id)}`)
     },
-    async createProject(input) {
-      return post("/api/projects", input)
+    async createProject(input): Promise<Project> {
+      return post<Project>("/api/projects", input)
     },
     async updateProject(id, patch) {
       return call<Project>(`/api/projects/${encodeURIComponent(id)}`, {

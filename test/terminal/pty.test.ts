@@ -87,7 +87,8 @@ describe("PTY 启动器（script 包装）", () => {
       while (exitCode === null && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 20))
       }
-      expect(exitCode).toBe(3)
+      // onExit 回调里的赋值 TS 控制流看不到，显式恢复声明类型，防止被窄化成 null
+      expect(exitCode as number | null).toBe(3)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -108,7 +109,8 @@ describe("PTY 启动器（script 包装）", () => {
       while (exitCode === null && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 10))
       }
-      expect(exitCode).toBe(7)
+      // onExit 回调里的赋值 TS 控制流看不到，显式恢复声明类型，防止被窄化成 null
+      expect(exitCode as number | null).toBe(7)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

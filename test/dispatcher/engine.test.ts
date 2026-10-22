@@ -17,7 +17,12 @@ async function toAnalyzing(s: Store, title: string, sessionID = "ses_ext"): Prom
   return s.claim({ id: t.id, sessionID, agent: "human" })
 }
 
-function fakeSession(overrides: Partial<DispatcherSession> = {}) {
+function fakeSession(overrides: Partial<DispatcherSession> = {}): DispatcherSession & {
+  // mock 观测字段(prompts/created/removed)不属于 DispatcherSession 契约,用交叉类型扩展
+  prompts: { sessionID: string; text: string }[]
+  created: { id: string; title?: string; directory?: string; model?: { providerID: string; id: string } }[]
+  removed: string[]
+} {
   const prompts: { sessionID: string; text: string }[] = []
   const created: { id: string; title?: string; directory?: string; model?: { providerID: string; id: string } }[] = []
   const removed: string[] = []
@@ -47,7 +52,7 @@ function fakeSession(overrides: Partial<DispatcherSession> = {}) {
       removed.push(input.sessionID)
       return {}
     },
-  } satisfies DispatcherSession
+  }
   return sess
 }
 
@@ -92,7 +97,9 @@ function harness(
       store,
       log: (m) => lines.push(m),
       onWrite: (fn) => (registered = fn),
-      broadcast: async () => broadcasts.push(Date.now()),
+      broadcast: async () => {
+        broadcasts.push(Date.now())
+      },
       evaluateMs: opts.evaluateMs ?? 10,
       claimWaitMs: opts.claimWaitMs ?? 20,
       backoffBaseMs: opts.backoffBaseMs ?? 60_000,
@@ -286,7 +293,8 @@ describe("engine 装配(沿驱动 initDispatcher)", () => {
       )
       return { d, session, lines }
     }
-    let registered: ((tasks?: Task[]) => void) | null = null
+    // `= null` 初始化会让 CFA 收窄成 null,`registered?.()` 报不可调用;显式联合注解规避
+    let registered = null as ((tasks?: Task[]) => void) | null
     const h1 = mkEngine()
     await store.setSettings({ autoDispatch: true, requireAnalysisConfirm: true })
     const t = await toPending(store, "重启任务")
@@ -325,7 +333,8 @@ describe("engine 装配(沿驱动 initDispatcher)", () => {
     })
     const session = fakeSession()
     const lines: string[] = []
-    let registered: ((tasks?: Task[]) => void) | null = null
+    // 同上:显式联合注解规避 CFA 收窄成 null
+    let registered = null as ((tasks?: Task[]) => void) | null
     const d = initDispatcher(
       { session, storage: { get: async (k) => entries[k], set: async (k, v) => { entries[k] = v } }, projectID: "p1", directory: "/proj" },
       {
@@ -505,7 +514,8 @@ describe("派发工作区解析", () => {
     const entries: Record<string, unknown> = {}
     const created: { directory?: string }[] = []
     const lines: string[] = []
-    let registered: ((tasks?: Task[]) => void) | null = null
+    // 同上:显式联合注解规避 CFA 收窄成 null
+    let registered = null as ((tasks?: Task[]) => void) | null
     let seq = 0
     const session = {
       create: async (input?: { title?: string; location?: { directory: string } }) => {

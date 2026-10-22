@@ -1,4 +1,4 @@
-import type { SpanRecord, Status, Task } from "./types"
+import type { PhaseSpan, SpanRecord, Status, Task } from "./types"
 
 /** 计时阶段：只有这两个状态占用 worker，会累计执行时长 */
 export const PHASES = ["analyzing", "executing"] as const

@@ -67,7 +67,7 @@ function harness(
         e.code = "invalid_transition"
         throw e
       }
-      return store.patch(id, patch)
+      await store.patch(id, patch)
     },
     onSettled: (taskID) => settled.push(taskID),
     onTimeout: (taskID) => timeouts.push(taskID),

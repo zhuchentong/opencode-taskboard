@@ -48,7 +48,8 @@ describe("命令文本", () => {
     await registerCommands(
       {
         command: {
-          transform: async (cb) => {
+          // 对象整体 as never 断言绕开了上下文类型：cb/cmd 需手工标注（与 added 元素类型一致）
+          transform: async (cb: (def: { add: (cmd: { name: string; execute: (i: { sessionID: string }) => Promise<void> }) => void }) => void) => {
             cb({
               add: (cmd) => added.push(cmd as never),
             })

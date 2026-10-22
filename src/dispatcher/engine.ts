@@ -39,7 +39,6 @@ import {
   shouldAct as alongShouldAct,
   toMaps,
   type AlongMaps,
-  type TaskTransition,
 } from "./state"
 import { createTrigger } from "./trigger"
 import type {
@@ -47,6 +46,7 @@ import type {
   DispatcherStorage,
   DispatcherStatus,
   GlobalPhase,
+  TaskTransition,
 } from "./types"
 
 export function initDispatcher(

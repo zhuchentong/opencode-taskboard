@@ -106,7 +106,7 @@ export async function discoverDaemon({
       )
     }
     throw new TerminalConfigError(
-      `读取 opencode 服务注册文件失败：${path}（${err?.message ?? "未知错误"}）`,
+      `读取 opencode 服务注册文件失败：${path}（${(err as Error)?.message ?? "未知错误"}）`,
     )
   }
   return parseServiceJson(text, path)

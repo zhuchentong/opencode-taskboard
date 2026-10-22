@@ -63,12 +63,14 @@ describe("arbitrate（忙端口探测：杜绝同项目双主）", () => {
 
   test("基准端口异构占用 → 首实例上移当主；第二实例探测到同项目主实例后降级代理", async () => {
     const foreign = Bun.serve({ port: 0, fetch: () => new Response("foreign") })
+    // Bun 1.4 类型里 Server.port 因 unix socket 监听场景可空；此处 TCP port:0 必有实际端口，非空断言收窄
+    const foreignPort = foreign.port!
     try {
-      const A = await arbitrate({ ...ARB_OPTS, port: foreign.port, localStore: await mkStore() })
+      const A = await arbitrate({ ...ARB_OPTS, port: foreignPort, localStore: await mkStore() })
       expect(A.primary).toBe(true)
-      expect(A.primaryPort).toBeGreaterThan(foreign.port)
+      expect(A.primaryPort).toBeGreaterThan(foreignPort)
 
-      const B = await arbitrate({ ...ARB_OPTS, port: foreign.port, localStore: await mkStore() })
+      const B = await arbitrate({ ...ARB_OPTS, port: foreignPort, localStore: await mkStore() })
       expect(B.primary).toBe(false)
       // B 的写必须落到 A 的存储（代理目标是被上移的 A，不是基准端口）
       const t = await B.store.create({ title: "经 B 写" })
@@ -84,19 +86,23 @@ describe("arbitrate（忙端口探测：杜绝同项目双主）", () => {
 
   test("异构服务占用基准与首个溢出端口 → 主实例跳过继续上移", async () => {
     const foreign = Bun.serve({ port: 0, fetch: () => new Response("f") })
-    let squatter: Bun.Server | undefined
+    // 同上：TCP port:0 必有实际端口，非空断言收窄
+    const foreignPort = foreign.port!
+    // 泛型参数与 src/server.ts 的 ServerHandle 一致（Bun 1.4 的 Server 必须带 WebSocketData 类型参数）
+    let squatter: Bun.Server<{ sessionID?: string }> | undefined
     try {
       for (let attempt = 0; attempt < 10 && !squatter; attempt++) {
-        const p = foreign.port + 1 + attempt
+        const p = foreignPort + 1 + attempt
         try {
           squatter = Bun.serve({ port: p, fetch: () => new Response("s") })
         } catch {
           // 被占，换下一个
         }
       }
-      const A = await arbitrate({ ...ARB_OPTS, port: foreign.port, projectID: "proj-arb2", localStore: await mkStore() })
+      const A = await arbitrate({ ...ARB_OPTS, port: foreignPort, projectID: "proj-arb2", localStore: await mkStore() })
       expect(A.primary).toBe(true)
-      expect(A.primaryPort).toBeGreaterThanOrEqual(squatter!.port + 1)
+      // squatter 由循环守卫保证已绑定；TCP 监听 port 必有值，两处非空断言仅收窄类型
+      expect(A.primaryPort).toBeGreaterThanOrEqual(squatter!.port! + 1)
       A.handle.stop()
     } finally {
       foreign.stop(true)
@@ -106,7 +112,8 @@ describe("arbitrate（忙端口探测：杜绝同项目双主）", () => {
 
   test("基准端口空闲 → 直接当主（回归）", async () => {
     const free = Bun.serve({ port: 0, fetch: () => new Response("x") })
-    const port = free.port
+    // 同上：TCP port:0 必有实际端口，非空断言收窄
+    const port = free.port!
     free.stop(true)
     const A = await arbitrate({ ...ARB_OPTS, port, projectID: "proj-arb3", localStore: await mkStore() })
     expect(A.primary).toBe(true)

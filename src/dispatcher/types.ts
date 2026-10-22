@@ -66,6 +66,8 @@ export interface DispatchState {
   inCooldown: boolean
   /** 距上次派发的毫秒数(从未派发过为 null) */
   lastDispatchAgeMs: number | null
+  /** 当日已派发数(仅观测口径;日上限守卫已按产品决策移除,不参与判定,旧测试矩阵兼容) */
+  todayCount?: number
 }
 
 /** 派发决策上下文 = 旧 DispatchState(别名保留,旧矩阵兼容) */

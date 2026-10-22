@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test"
 import { DISPATCH_CAPS, initDispatcher, type DispatcherSession } from "../src/dispatcher/index"
 import { createStore, memoryBackend, type Store } from "../src/store"
 import type { Task } from "../src/types"
-import type { Task } from "../src/types"
 
 // 把任务推进到 pending 的人工路径
 async function toPending(s: Store, title: string): Promise<Task> {
@@ -18,7 +17,13 @@ async function toAnalyzing(s: Store, title: string, sessionID = "ses_ext"): Prom
 
 type TokenRead = { input: number; output: number; reasoning: number; cache: { read: number; write: number } }
 
-function fakeSession() {
+function fakeSession(): DispatcherSession & {
+  // mock 观测字段(prompts/created/removed/tokens)不属于 DispatcherSession 契约,用交叉类型扩展
+  prompts: { sessionID: string; text: string }[]
+  created: { id: string; title?: string; directory?: string; model?: { providerID: string; id: string } }[]
+  removed: string[]
+  tokens: Map<string, TokenRead>
+} {
   const prompts: { sessionID: string; text: string }[] = []
   const created: { id: string; title?: string; directory?: string; model?: { providerID: string; id: string } }[] = []
   const removed: string[] = []
@@ -46,7 +51,7 @@ function fakeSession() {
       removed.push(input.sessionID)
       return {}
     },
-  } satisfies DispatcherSession
+  }
   return sess
 }
 
@@ -72,7 +77,8 @@ function harness(
   const store = createStore(memoryBackend(), { requireAnalysisConfirm: false })
   const lines: string[] = []
   const broadcasts: number[] = []
-  let registered: (() => void) | null = null
+  // 对齐 engine 的 onWrite 契约:回调携带可选 tasks 载荷
+  let registered: ((tasks?: Task[]) => void) | null = null
   const session = fakeSession()
   if (opts.promptFail) session.prompt = async () => { throw new Error("session api down") }
   if (opts.createFail) session.create = async () => { throw new Error("cannot create session") }

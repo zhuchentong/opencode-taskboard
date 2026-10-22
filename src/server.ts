@@ -1,16 +1,18 @@
 import { dirname, isAbsolute, join, resolve } from "node:path"
 import { statSync } from "node:fs"
 import { readdir, stat } from "node:fs/promises"
+import type { Dirent } from "node:fs"
 import { homedir } from "node:os"
 import { StoreError } from "./types"
 import { SSE_HEARTBEAT_MS, MAX_SSE_SUBSCRIBERS, FS_LIST_CAP } from "./constants"
-import type { BoardSettings, Project, Store, Task } from "./types"
+import type { Store } from "./store"
+import type { BoardSettings, Project, Task, TaskUsage } from "./types"
 import type { TerminalBridge } from "./terminal"
 
 export type ServerEvent = { type: "hello" } | { type: "snapshot"; tasks: Task[]; settings: BoardSettings; projects: Project[] }
 
 export interface ServerHandle {
-  server: Bun.Server
+  server: Bun.Server<{ sessionID?: string }>
   actualPort: number
   stop(): void
   emit(event: ServerEvent): void
@@ -128,9 +130,9 @@ export function createServer(
       return Response.json({ error: { code: "invalid_path", message: `目录必须是绝对路径：${raw}` } }, { status: 400 })
     }
     const target = resolve(raw)
-    let dirents: Awaited<ReturnType<typeof readdir>>
+    let dirents: Dirent[]
     try {
-      dirents = (await readdir(target, { withFileTypes: true })) as Awaited<ReturnType<typeof readdir>>
+      dirents = await readdir(target, { withFileTypes: true })
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
       if (code === "EACCES" || code === "EPERM") {
@@ -196,7 +198,9 @@ export function createServer(
       settings: await store.getSettings(),
       projects: await store.listProjects(),
     })
-    if (notifyOnWrite && opts.onWrite) setTimeout(() => opts.onWrite(tasks), 0)
+    // 局部变量收窄：闭包回调内 TS 不保留 opts.onWrite 的 undefined 排除
+    const onWrite = opts.onWrite
+    if (notifyOnWrite && onWrite) setTimeout(() => onWrite(tasks), 0)
   }
 
   function handleEvents(req: Request): Response {
@@ -407,11 +411,15 @@ export function createServer(
         case "release":
           task = await store.release({ id, sessionID })
           break
-        case "usage":
+        case "usage": {
           // 消耗统计：主实例由派发器直连 store 回写（不经本路由），
           // 此处只为次要实例的代理链保持 Store 接口完整
-          task = await store.recordUsage({ id, usage: body.usage as Task["usage"] })
+          if (!body.usage || typeof body.usage !== "object") {
+            throw new StoreError("invalid_input", "缺少合法的 usage 数据")
+          }
+          task = await store.recordUsage({ id, usage: body.usage as TaskUsage })
           break
+        }
         default:
           task = await store.updateNotes({
             id,
@@ -445,7 +453,8 @@ export function createServer(
     return Response.json({ error: { code: "not_found", message: `未知 API 路径：${pathname}` } }, { status: 404 })
   }
 
-  const server = Bun.serve({
+  // 显式 WebSocket data 泛型：upgrade 的 data 与 open/message 回调的 ws.data 共享同一类型
+  const server = Bun.serve<{ sessionID?: string }>({
     hostname: "127.0.0.1",
     port: opts.port,
     // SSE 长连接守护：Bun 默认 idleTimeout=10s（无数据即断），而 SSE 心跳间隔 25s——
@@ -499,7 +508,7 @@ export function createServer(
 
   return {
     server,
-    actualPort: server.port,
+    actualPort: server.port ?? opts.port,
     stop: () => server.stop(true),
     emit,
     emitSnapshot,

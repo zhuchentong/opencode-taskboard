@@ -35,9 +35,9 @@ describe("终端桥装配（仅主实例）", () => {
     await storeA.patch(t.id, { status: "pending" })
     await storeA.claim({ id: t.id, sessionID: "ses_terminal", agent: "build" })
 
-    // 基准端口：A 当主
+    // 基准端口：A 当主（Bun.serve 的 port 类型带 undefined；端口 0 由内核分配，启动后必有值）
     const probe = Bun.serve({ port: 0, fetch: () => new Response("x") })
-    const basePort = probe.port
+    const basePort = probe.port as number
     probe.stop(true)
 
     const A = await arbitrate({ ...ARB_OPTS, port: basePort, localStore: storeA, terminal: bridge })
@@ -67,8 +67,9 @@ describe("终端桥装配（仅主实例）", () => {
     const store = createStore(memoryBackend(), { requireAnalysisConfirm: false })
     const t = await store.create({ title: "没会话" })
 
+    // Bun.serve 的 port 类型带 undefined；端口 0 由内核分配，启动后必有值
     const probe = Bun.serve({ port: 0, fetch: () => new Response("x") })
-    const basePort = probe.port
+    const basePort = probe.port as number
     probe.stop(true)
 
     const A = await arbitrate({ ...ARB_OPTS, port: basePort, localStore: store, terminal: bridge })

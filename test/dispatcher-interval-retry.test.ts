@@ -12,7 +12,10 @@ async function toPending(s: Store, title: string): Promise<Task> {
   return s.patch(t.id, { status: "pending" })
 }
 
-function fakeSession() {
+function fakeSession(): DispatcherSession & {
+  // mock 观测字段(created)不属于 DispatcherSession 契约,用交叉类型扩展
+  created: { id: string }[]
+} {
   const created: { id: string }[] = []
   let seq = 0
   const sess = {
@@ -25,7 +28,7 @@ function fakeSession() {
     get: async () => ({}),
     prompt: async () => ({}),
     remove: async () => ({}),
-  } satisfies DispatcherSession
+  }
   return sess
 }
 

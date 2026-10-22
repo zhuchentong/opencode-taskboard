@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { transitionSpans } from "../src/spans"
-import type { Status, Task } from "../src/types"
+import type { PhaseSpan, Status, Task } from "../src/types"
 
 const T = (status: Status, extra: Partial<Task> = {}): Task => ({
   id: "task_x",
@@ -36,7 +36,9 @@ describe("transitionSpans 双写 spanLog(分段计时账本)", () => {
     ])
     // 旧 spans 结构仍是「最后一段」语义,前端两段计时不受影响
     expect(cur.spans?.analyzing).toEqual({ startedAt: 3000, endedAt: 4000 })
-    expect(cur.spans?.analysis_confirm).toBeUndefined() // 旧结构不含 analysis_confirm
+    // spans 键位类型只有 analyzing/executing：放宽为索引签名以表达「旧结构不含 analysis_confirm 键」的运行时断言
+    const legacySpans = cur.spans as Partial<Record<string, PhaseSpan>> | undefined
+    expect(legacySpans?.analysis_confirm).toBeUndefined() // 旧结构不含 analysis_confirm
   })
 
   test("spanLog 段带 round 与 sessionID(human claim 的空 sessionID 缺省)", () => {

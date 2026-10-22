@@ -14,6 +14,7 @@ describe("clientStore（HTTP Store 实现）", () => {
       token: "tok",
       webDir: "test",
       primary: true,
+      projectID: "proj-client",
     })
     try {
       const s = clientStore(`http://127.0.0.1:${handle.actualPort}`, "tok")

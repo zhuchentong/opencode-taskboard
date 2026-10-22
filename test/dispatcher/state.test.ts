@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { Task } from "../../src/types"
+import type { Status, Task } from "../../src/types"
 import {
   extractTransitions,
   loadAlongState,
@@ -78,14 +78,16 @@ describe("extractTransitions(沿提取)", () => {
 describe("沿幂等(lastActedSeq)", () => {
   test("shouldAct:seq > 已记录时 true,否则 false;未知任务视为 0", () => {
     const lastActed = new Map<string, number>([["t1", 5]])
-    expect(shouldAct(lastActed, { taskID: "t1", from: "a", to: "b", seq: 6 })).toBe(true)
-    expect(shouldAct(lastActed, { taskID: "t1", from: "a", to: "b", seq: 5 })).toBe(false)
-    expect(shouldAct(lastActed, { taskID: "t2", from: "a", to: "b", seq: 1 })).toBe(true)
+    // 测试故意用非枚举值:shouldAct 只比较 taskID 与 seq,不校验 Status 合法性
+    expect(shouldAct(lastActed, { taskID: "t1", from: "a" as Status, to: "b" as Status, seq: 6 })).toBe(true)
+    expect(shouldAct(lastActed, { taskID: "t1", from: "a" as Status, to: "b" as Status, seq: 5 })).toBe(false)
+    expect(shouldAct(lastActed, { taskID: "t2", from: "a" as Status, to: "b" as Status, seq: 1 })).toBe(true)
   })
 
   test("markActed 后同沿 shouldAct 为 false", () => {
     const lastActed = new Map<string, number>()
-    const along = { taskID: "t1", from: "a", to: "b", seq: 3 }
+    // 测试故意用非枚举值:沿对象只承载 taskID/seq 比较,from/to 不做 Status 合法性校验
+    const along = { taskID: "t1", from: "a" as Status, to: "b" as Status, seq: 3 }
     expect(shouldAct(lastActed, along)).toBe(true)
     markActed(lastActed, along)
     expect(shouldAct(lastActed, along)).toBe(false)

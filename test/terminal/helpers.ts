@@ -86,16 +86,30 @@ export function createFakeClock(start = 0) {
   }
 }
 
+/**
+ * 假响应：允许只写关心的字段（Partial），
+ * 缺失字段由假执行器补默认值（code=0、stdout/stderr=""），与注入方 RunCmd 的返回解耦。
+ */
+export type FakeRunResponse = Partial<RunResult>
+
+/** 假执行器的兜底返回（展开变量避免 TS2783 字面量重复告警；运行时语义不变） */
+const DEFAULT_RUN_RESULT: RunResult = { code: 0, stdout: "", stderr: "" }
+
 /** 假外部命令执行器（tmux/stty）；按子命令定制返回 */
-export function createFakeRunCmd(responses: Record<string, RunResult | ((args: string[]) => RunResult)> = {}) {
+export function createFakeRunCmd(responses: Record<string, FakeRunResponse | ((args: string[]) => FakeRunResponse)> = {}) {
   const calls: Array<{ file: string; args: string[] }> = []
-  const run = async (file: string, args: string[]): Promise<RunResult> => {
+  const run = async (
+    file: string,
+    args: string[],
+    // 对齐 RunCmd 的第三参（timeoutMs/env）：假执行器不关心，只透传不使用
+    _opts?: { timeoutMs?: number; env?: Record<string, string> },
+  ): Promise<RunResult> => {
     calls.push({ file, args: [...args] })
     const key = args[0]
     const response = responses[key]
-    if (typeof response === "function") return { code: 0, stdout: "", stderr: "", ...response(args) }
-    if (response && typeof response === "object") return { code: 0, stdout: "", stderr: "", ...response }
-    return { code: 0, stdout: "", stderr: "" }
+    if (typeof response === "function") return { ...DEFAULT_RUN_RESULT, ...response(args) }
+    if (response && typeof response === "object") return { ...DEFAULT_RUN_RESULT, ...response }
+    return { ...DEFAULT_RUN_RESULT }
   }
   run.calls = calls
   run.findCalls = (key: string) => calls.filter((c) => c.args[0] === key)

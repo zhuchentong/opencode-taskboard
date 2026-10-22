@@ -6,7 +6,7 @@
 // 时间源可注入（测试用假时钟），默认用宿主定时器。
 
 /** 默认时钟：宿主定时器 */
-export const systemClock = {
+export const systemClock: Clock = {
   now: () => Date.now(),
   setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),
   clearTimeout: (handle: ReturnType<typeof setTimeout>) => clearTimeout(handle),
