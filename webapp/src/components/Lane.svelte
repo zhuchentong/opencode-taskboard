@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Badge } from "$lib/components/ui/badge"
   import { drag } from "$lib/drag.svelte"
+  import { STATUS_TOKEN } from "$lib/board"
   import type { Project, Status, Task } from "$lib/types"
   import Card from "./Card.svelte"
 
@@ -16,11 +17,20 @@
     pendingIds,
     flashIds,
     projMap,
+    wrap = false,
+    collapsed = false,
+    onexpand,
   }: {
     status: Status
     label: string
     tasks: Task[]
     empty?: string
+    /** 换行列（确认泳道）：卡片可换行、泳道高度自适应，任务全部可见不横滚 */
+    wrap?: boolean
+    /** 折叠态：任务非空时收成单行摘要按钮（done 泳道专用） */
+    collapsed?: boolean
+    /** 折叠态点击摘要按钮展开 */
+    onexpand?: () => void
     onopen: (task: Task) => void
     onconfirm?: (task: Task) => void
     onquickreject?: (task: Task) => void
@@ -31,28 +41,35 @@
   } = $props()
 
   const isOver = $derived(drag.overStatus === status && drag.draggingId !== null)
-  const dropIndex = $derived(isOver ? drag.overIndex : null)
-
-  // 状态令牌映射（与 Card 的色带/圆点同源）：泳道头圆点
-  const DOT_BY_STATUS: Record<string, string> = {
-    analyzing: "bg-primary",
-    executing: "bg-primary",
-    analysis_confirm: "bg-warning",
-    completion_confirm: "bg-warning",
-    done: "bg-muted-foreground/60",
-  }
+  // 状态令牌（与 Card 的色带/圆点同源）：泳道头圆点，映射单一来源在 lib/board.ts
+  const token = $derived(STATUS_TOKEN[status])
 </script>
 
-<!-- 固定高度 + 左右结构：标题条满高贴左边（上下布局），右侧单行卡片流 -->
+<!-- 左右结构：标题条满高贴左边（上下布局），右侧卡片流。
+     普通列：固定高度 + 单行横滚；换行列（确认泳道）：min-h 自适应 + 卡片换行。 -->
 <section
-  class="lane flex h-40 flex-none overflow-hidden rounded-lg border bg-card/50 {isOver ? 'drag-over' : ''}"
+  class="lane flex flex-none rounded-lg border bg-card/50
+    {collapsed && tasks.length > 0 ? 'min-h-10' : wrap ? 'min-h-40' : 'h-40 overflow-hidden'}
+    {isOver ? 'drag-over' : ''}"
   data-status={status}
   aria-label={`泳道：${label}`}
 >
+  {#if collapsed && tasks.length > 0}
+    <!-- 折叠态：单行摘要（section 保留 lane class + data-status，拖拽悬停整道描边照常命中） -->
+    <button
+      type="button"
+      class="flex flex-1 items-center gap-2 px-3 py-2 text-left text-[13px] text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+      onclick={() => onexpand?.()}
+    >
+      <span class="size-2 flex-none rounded-full {token.dot}"></span>
+      <span class="font-medium text-foreground">{label}</span>
+      <span>已完成 {tasks.length} · 点击展开</span>
+    </button>
+  {:else}
   <!-- 左侧标题条：满高贴边、独立背景色；上组（圆点+竖排文字，紧凑）+ 数量贴底 -->
   <h2 class="flex w-9 flex-none flex-col items-center bg-muted py-2 text-[13px] font-medium text-foreground">
     <div class="flex flex-col items-center gap-2">
-      <span class="size-2 flex-none rounded-full {DOT_BY_STATUS[status] ?? 'bg-muted-foreground/60'}"></span>
+      <span class="size-2 flex-none rounded-full {token.dot}"></span>
       <span class="vertical-label">{label}</span>
     </div>
     <Badge variant="secondary" class="mt-auto px-1 text-[11px] text-muted-foreground">{tasks.length}</Badge>
@@ -61,18 +78,16 @@
     <p class="flex flex-none items-center py-3 text-xs text-muted-foreground/70">{empty ?? ""}</p>
   {/if}
   <!-- 空泳道也保留卡片容器：拖入第一张卡的落点 -->
-  <!-- 单行卡片流：不换行、卡片撑满泳道高、溢出横向滚动（永不出现纵向滚动条） -->
-  <div class="cards flex min-w-0 flex-1 flex-nowrap items-stretch gap-2.5 overflow-x-auto overflow-y-hidden p-3">
-    {#each tasks as task, i (task.id)}
-      {#if dropIndex === i}
-        <div class="drop-line w-[3px] flex-none self-stretch rounded-sm bg-primary" aria-hidden="true"></div>
-      {/if}
+  <!-- 普通列单行横滚（永不出现纵向滚动条）；换行列 flex-wrap，全部任务可见 -->
+  <div
+    class="cards flex min-w-0 flex-1 items-stretch gap-2.5 p-3
+      {wrap ? 'flex-wrap' : 'flex-nowrap overflow-x-auto overflow-y-hidden'}"
+  >
+    {#each tasks as task (task.id)}
       <Card {task} {onopen} {onconfirm} {onquickreject} {pendingIds} {flashIds} {onmove} {projMap} />
     {/each}
-    {#if dropIndex === tasks.length}
-      <div class="drop-line w-[3px] flex-none self-stretch rounded-sm bg-primary" aria-hidden="true"></div>
-    {/if}
   </div>
+  {/if}
 </section>
 
 <style>

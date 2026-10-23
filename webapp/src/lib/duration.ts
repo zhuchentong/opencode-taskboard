@@ -145,3 +145,26 @@ export function summarizeSpans(task: Task, now: number): SpanSummary {
   const wallClock = (task.status === "done" ? task.updatedAt : now) - task.createdAt
   return { rows, activeTotal, wallClock }
 }
+
+/** 按阶段聚合后的分段组：组顺序 = 阶段首次出现的顺序，组内保持原始行序 */
+export interface SpanGroup {
+  phase: SpanRecord["phase"]
+  label: string
+  rows: SpanRow[]
+}
+
+/** 把分段明细行按 phase 聚合成组（同阶段多轮次归入同组），供详情表按阶段分组渲染 */
+export function groupSpanRows(rows: SpanRow[]): SpanGroup[] {
+  const groups: SpanGroup[] = []
+  const byPhase = new Map<SpanRecord["phase"], SpanGroup>()
+  for (const r of rows) {
+    let g = byPhase.get(r.phase)
+    if (!g) {
+      g = { phase: r.phase, label: r.label, rows: [] }
+      byPhase.set(r.phase, g)
+      groups.push(g)
+    }
+    g.rows.push(r)
+  }
+  return groups
+}

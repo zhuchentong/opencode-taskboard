@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { STATUS_LABELS, STATUSES, groupByStatus, timeAgo } from "../src/lib/board"
+import { STATUS_HINTS, STATUS_LABELS, STATUS_TOKEN, STATUSES, groupByStatus, timeAgo } from "../src/lib/board"
 import type { Task } from "../src/lib/types"
 
 const T = (over: Partial<Task>): Task => ({
@@ -26,6 +26,45 @@ describe("STATUSES / STATUS_LABELS", () => {
     ])
     expect(STATUS_LABELS.pending).toBe("待领取")
     expect(STATUS_LABELS.completion_confirm).toBe("完成确认")
+  })
+})
+
+describe("STATUS_TOKEN 七状态色板", () => {
+  test("七键齐全，每键含 dot 与 band 且均为非空字符串", () => {
+    expect(Object.keys(STATUS_TOKEN)).toHaveLength(7)
+    for (const s of STATUSES) {
+      const t = STATUS_TOKEN[s]
+      expect(t.dot.length).toBeGreaterThan(0)
+      expect(t.band.length).toBeGreaterThan(0)
+      // 圆点类必须是背景类、色带类必须是左边框类（消费方类名契约）
+      expect(t.dot.startsWith("bg-")).toBe(true)
+      expect(t.band.startsWith("border-l-")).toBe(true)
+    }
+  })
+
+  test("两个确认列有意同色（琥珀=等人工裁决）", () => {
+    expect(STATUS_TOKEN.analysis_confirm).toEqual(STATUS_TOKEN.completion_confirm)
+  })
+
+  test("pending 活跃排队：脉冲动画且尊重减弱动效偏好", () => {
+    expect(STATUS_TOKEN.pending.dot).toContain("animate-pulse")
+    expect(STATUS_TOKEN.pending.dot).toContain("motion-reduce:animate-none")
+  })
+
+  test("七状态 dot 互不雷同（done 的灰与 pending 的蓝可区分）", () => {
+    const dots = STATUSES.map((s) => STATUS_TOKEN[s].dot)
+    expect(new Set(dots.filter((_, i) => STATUSES[i] !== "completion_confirm")).size).toBe(6)
+  })
+})
+
+describe("STATUS_HINTS 空泳道引导文案", () => {
+  test("七键齐全，均为非空中文文案", () => {
+    expect(Object.keys(STATUS_HINTS)).toHaveLength(7)
+    for (const s of STATUSES) {
+      expect(STATUS_HINTS[s].length).toBeGreaterThan(0)
+      // 含中文（拒绝空串/占位符漏配）
+      expect(/[\u4e00-\u9fff]/.test(STATUS_HINTS[s])).toBe(true)
+    }
   })
 })
 

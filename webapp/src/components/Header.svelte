@@ -3,7 +3,6 @@
   import { Button } from "$lib/components/ui/button"
   import { Input } from "$lib/components/ui/input"
   import { Textarea } from "$lib/components/ui/textarea"
-  import * as DropdownMenu from "$lib/components/ui/dropdown-menu"
   import { Switch } from "$lib/components/ui/switch"
   import type { ConnState } from "$lib/api"
   import { DEFAULT_PROJECT_ID, type BoardSettings, type Project } from "$lib/types"
@@ -51,11 +50,12 @@
     ondispatch: (autoDispatch: boolean) => void
     /** 阶段模型变更(phase 为设置字段名;门禁:两模型都必选,无「跟随默认」) */
     onmodel: (phase: "modelAnalyze" | "modelExecute", value: string) => void
-    /** 主题菜单选择（auto 跟随系统 / light 浅色 / dark 深色） */
+    /** 主题选择（auto 跟随系统 / light 浅色 / dark 深色,入口在设置弹层「外观」） */
     onsetmode: (mode: ThemeMode) => void
   } = $props()
 
   let open = $state(false)
+  let settingsOpen = $state(false)
   let title = $state("")
   let description = $state("")
   let projectSel = $state(DEFAULT_PROJECT_ID)
@@ -65,7 +65,8 @@
   let projectsOpen = $state(false)
 
   // 阶段模型下拉:受控值镜像(settings 是 props 不可 bind);选项异步就绪后重申当前值,
-  // 防浏览器在 value 不在 option 列表时静默回落到首项
+  // 防浏览器在 value 不在 option 列表时静默回落到首项。
+  // $state 留在本组件顶层——设置弹层关闭时内容卸载,状态不能放进弹层内部
   const modelGroups = $derived(groupModels(models))
   let analyzeSel = $state("")
   let executeSel = $state("")
@@ -101,6 +102,13 @@
     { value: "light", label: "浅色" },
     { value: "dark", label: "深色" },
   ]
+
+  const SHORTCUTS: { keys: string; desc: string }[] = [
+    { keys: "Alt+↑/↓", desc: "跨泳道移动卡片" },
+    { keys: "Enter", desc: "打开详情" },
+    { keys: "Esc", desc: "关闭弹层 / 收起打回表单" },
+    { keys: "Esc（拖拽中）", desc: "取消拖拽" },
+  ]
 </script>
 
 <header class="sticky top-0 z-10 flex flex-wrap items-center gap-4 border-b bg-background px-4 py-2.5">
@@ -110,7 +118,7 @@
       size="sm"
       onclick={openCreate}
       disabled={!modelsReady}
-      title={modelsReady ? "新建任务" : "请先在右侧选择分析模型与执行模型"}>
+      title={modelsReady ? "新建任务" : "请先在 ⚙ 设置中选择分析模型与执行模型"}>
       ＋ 新建任务
     </Button>
     <label
@@ -131,93 +139,8 @@
   </div>
   <span class="flex-1"></span>
   <div class="flex flex-wrap items-center justify-end gap-2">
-    <label
-      class="inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 whitespace-nowrap transition-all
-        {settings.requireAnalysisConfirm
-          ? 'border-emerald-500/40 bg-emerald-500/10'
-          : 'border-border bg-card/40 opacity-60'}"
-      title="开启后，Agent 提交分析将停在「分析确认」泳道等待放行">
-      <Switch checked={settings.requireAnalysisConfirm} onCheckedChange={(v) => ontoggle(v)} aria-label="分析需人工确认" />
-      <span class="text-[13px] font-medium">分析需人工确认</span>
-      <span
-        class="text-[12px] font-bold {settings.requireAnalysisConfirm ? 'text-emerald-400' : 'text-zinc-500'}"
-        aria-hidden="true">
-        {settings.requireAnalysisConfirm ? "已开启" : "已关闭"}
-      </span>
-    </label>
-    <label
-      class="inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 whitespace-nowrap transition-all
-        {settings.autoDispatch
-          ? 'border-emerald-500/40 bg-emerald-500/10'
-          : 'border-border bg-card/40 opacity-60'}"
-      title="开启后，待领取出现任务时插件会自动驱动一个 Agent 会话领取并处理">
-      <Switch checked={settings.autoDispatch} onCheckedChange={(v) => ondispatch(v)} aria-label="自动领取" />
-      <span class="text-[13px] font-medium">自动领取</span>
-      <span
-        class="text-[12px] font-bold {settings.autoDispatch ? 'text-emerald-400' : 'text-zinc-500'}"
-        aria-hidden="true">
-        {settings.autoDispatch ? "已开启" : "已关闭"}
-      </span>
-    </label>
-    <label
-      class="inline-flex items-center gap-2 rounded-lg border border-border bg-card/40 px-3 py-1.5 whitespace-nowrap"
-      title="分析阶段(领取/分析/重析回合)worker 会话使用的模型;必须显式选择,未配置将阻止创建任务">
-      <span class="text-[13px] font-medium">分析模型</span>
-      <select
-        bind:value={analyzeSel}
-        onchange={() => onmodel("modelAnalyze", analyzeSel)}
-        class="max-w-44 rounded-md border border-border bg-background px-1.5 py-1 text-[12px] text-foreground outline-none focus:ring-1 focus:ring-ring"
-        aria-label="分析阶段模型">
-        <option value="" disabled>请选择模型</option>
-        {#if modelGroups.length === 0}
-          <option value="__none__" disabled>(模型列表不可用)</option>
-        {/if}
-        {#each modelGroups as g (g.provider)}
-          <optgroup label={g.provider}>
-            {#each g.models as m (m)}
-              <option value={`${g.provider}/${m}`}>{m}</option>
-            {/each}
-          </optgroup>
-        {/each}
-      </select>
-    </label>
-    <label
-      class="inline-flex items-center gap-2 rounded-lg border border-border bg-card/40 px-3 py-1.5 whitespace-nowrap"
-      title="执行阶段(放行后的执行回合)worker 会话使用的模型;与分析模型可不同,同会话按回合切换;必须显式选择">
-      <span class="text-[13px] font-medium">执行模型</span>
-      <select
-        bind:value={executeSel}
-        onchange={() => onmodel("modelExecute", executeSel)}
-        class="max-w-44 rounded-md border border-border bg-background px-1.5 py-1 text-[12px] text-foreground outline-none focus:ring-1 focus:ring-ring"
-        aria-label="执行阶段模型">
-        <option value="" disabled>请选择模型</option>
-        {#if modelGroups.length === 0}
-          <option value="__none__" disabled>(模型列表不可用)</option>
-        {/if}
-        {#each modelGroups as g (g.provider)}
-          <optgroup label={g.provider}>
-            {#each g.models as m (m)}
-              <option value={`${g.provider}/${m}`}>{m}</option>
-            {/each}
-          </optgroup>
-        {/each}
-      </select>
-    </label>
     <StatusDot state={conn} />
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger>
-        {#snippet child({ props })}
-          <Button {...props} variant="ghost" size="sm" title="切换主题">{modeLabel}</Button>
-        {/snippet}
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Content align="end">
-        <DropdownMenu.RadioGroup value={mode} onValueChange={(v) => onsetmode(v as ThemeMode)}>
-          {#each THEME_OPTIONS as opt (opt.value)}
-            <DropdownMenu.RadioItem value={opt.value}>{opt.label}</DropdownMenu.RadioItem>
-          {/each}
-        </DropdownMenu.RadioGroup>
-      </DropdownMenu.Content>
-    </DropdownMenu.Root>
+    <Button size="sm" variant="outline" onclick={() => (settingsOpen = true)} title="打开设置">⚙ 设置</Button>
   </div>
 </header>
 
@@ -248,6 +171,129 @@
         </Button>
       </Dialog.Footer>
     </form>
+  </Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root bind:open={settingsOpen}>
+  <Dialog.Content class="sm:max-w-md">
+    <Dialog.Header class="gap-1">
+      <Dialog.Title class="text-sm">设置</Dialog.Title>
+      <Dialog.Description class="sr-only">看板流转、模型、外观与快捷键设置</Dialog.Description>
+    </Dialog.Header>
+    <div class="grid gap-5">
+      <!-- 流转 -->
+      <section class="grid gap-2.5" aria-label="流转设置">
+        <h3 class="text-[12px] font-semibold tracking-wide text-muted-foreground uppercase">流转</h3>
+        <label class="flex cursor-pointer items-start gap-2.5">
+          <Switch
+            class="mt-0.5"
+            checked={settings.requireAnalysisConfirm}
+            onCheckedChange={(v) => ontoggle(v)}
+            aria-label="分析需人工确认" />
+          <span class="grid gap-0.5">
+            <span class="text-[13px] font-medium">分析需人工确认</span>
+            <span class="text-[12px] leading-relaxed text-muted-foreground">
+              Agent 提交分析后将停在「分析确认」泳道，等待人工放行
+            </span>
+          </span>
+        </label>
+        <label class="flex cursor-pointer items-start gap-2.5">
+          <Switch
+            class="mt-0.5"
+            checked={settings.autoDispatch}
+            onCheckedChange={(v) => ondispatch(v)}
+            aria-label="自动领取" />
+          <span class="grid gap-0.5">
+            <span class="text-[13px] font-medium">自动领取</span>
+            <span class="text-[12px] leading-relaxed text-muted-foreground">
+              待领取出现任务时，插件自动驱动一个 Agent 会话领取并处理
+            </span>
+          </span>
+        </label>
+      </section>
+      <!-- 模型 -->
+      <section class="grid gap-2.5" aria-label="模型设置">
+        <h3 class="text-[12px] font-semibold tracking-wide text-muted-foreground uppercase">模型</h3>
+        <label class="grid gap-1">
+          <span class="text-[13px] font-medium">分析模型</span>
+          <select
+            bind:value={analyzeSel}
+            onchange={() => onmodel("modelAnalyze", analyzeSel)}
+            class="w-full rounded-md border border-border bg-background px-2 py-1.5 text-[13px] text-foreground outline-none focus:ring-1 focus:ring-ring"
+            aria-label="分析阶段模型">
+            <option value="" disabled>请选择模型</option>
+            {#if modelGroups.length === 0}
+              <option value="__none__" disabled>(模型列表不可用)</option>
+            {/if}
+            {#each modelGroups as g (g.provider)}
+              <optgroup label={g.provider}>
+                {#each g.models as m (m)}
+                  <option value={`${g.provider}/${m}`}>{m}</option>
+                {/each}
+              </optgroup>
+            {/each}
+          </select>
+          <span class="text-[12px] leading-relaxed text-muted-foreground">
+            分析阶段（领取/分析/重析回合）worker 会话使用的模型
+          </span>
+        </label>
+        <label class="grid gap-1">
+          <span class="text-[13px] font-medium">执行模型</span>
+          <select
+            bind:value={executeSel}
+            onchange={() => onmodel("modelExecute", executeSel)}
+            class="w-full rounded-md border border-border bg-background px-2 py-1.5 text-[13px] text-foreground outline-none focus:ring-1 focus:ring-ring"
+            aria-label="执行阶段模型">
+            <option value="" disabled>请选择模型</option>
+            {#if modelGroups.length === 0}
+              <option value="__none__" disabled>(模型列表不可用)</option>
+            {/if}
+            {#each modelGroups as g (g.provider)}
+              <optgroup label={g.provider}>
+                {#each g.models as m (m)}
+                  <option value={`${g.provider}/${m}`}>{m}</option>
+                {/each}
+              </optgroup>
+            {/each}
+          </select>
+          <span class="text-[12px] leading-relaxed text-muted-foreground">
+            执行阶段（放行后的执行回合）worker 会话使用的模型，与分析模型可不同
+          </span>
+        </label>
+      </section>
+      <!-- 外观 -->
+      <section class="grid gap-2.5" aria-label="外观设置">
+        <h3 class="text-[12px] font-semibold tracking-wide text-muted-foreground uppercase">
+          外观<span class="ml-2 text-[12px] font-normal normal-case">当前：{modeLabel}</span>
+        </h3>
+        <div class="flex gap-2" role="radiogroup" aria-label="主题">
+          {#each THEME_OPTIONS as opt (opt.value)}
+            <Button
+              size="sm"
+              variant={mode === opt.value ? "default" : "outline"}
+              aria-pressed={mode === opt.value}
+              onclick={() => onsetmode(opt.value)}>
+              {opt.label}
+            </Button>
+          {/each}
+        </div>
+      </section>
+      <!-- 快捷键 -->
+      <section class="grid gap-2" aria-label="快捷键说明">
+        <h3 class="text-[12px] font-semibold tracking-wide text-muted-foreground uppercase">快捷键</h3>
+        <ul class="grid gap-1.5">
+          {#each SHORTCUTS as sc (sc.keys)}
+            <li class="flex items-center gap-2 text-[12px] text-muted-foreground">
+              <kbd
+                class="inline-flex items-center rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px] whitespace-nowrap text-foreground">
+                {sc.keys}
+              </kbd>
+              <span>{sc.desc}</span>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    </div>
   </Dialog.Content>
 </Dialog.Root>
 

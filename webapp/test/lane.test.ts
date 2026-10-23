@@ -29,6 +29,13 @@ describe("insertIndex（泳道内插入判定，支持 wrap 多行）", () => {
     expect(insertIndex(5, 100, 160, rects(5))).toBe(5) // 指第 1 行 E 右半 → 行尾之后
   })
 
+  test("wrap 双行中段插入：第二行内按 X 中线定位，返回第二行原始下标", () => {
+    // 8 张卡两行（每行 4 张）：第二行为下标 4..7；x=140 指第二行第 2 张（110..210，中线 160）左半 → 插其前（原下标 5）
+    expect(insertIndex(8, 140, 160, rects(8))).toBe(5)
+    // x=190 指同一张右半 → 插其后（原下标 6）
+    expect(insertIndex(8, 190, 160, rects(8))).toBe(6)
+  })
+
   test("指针落在两行之间 → 归属垂直中心更近的行", () => {
     // y=105 恰在两行之间（中心 50 与 160 等距 55）→ 取先遍历到的第 0 行
     expect(insertIndex(5, 30, 105, rects(5))).toBe(0)

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 模型门禁引导:分析/执行模型未配齐时替代泳道区,指引到页头下拉配置。
+  // 模型门禁引导:分析/执行模型未配齐时替代泳道区,指引到页头右上「⚙ 设置」弹层配置。
   // 配齐后 App 响应式切回 Board,本组件无 props(门禁判定在 App 用 modelsConfigured 完成)。
 </script>
 
@@ -13,8 +13,8 @@
       opencode 默认」。
     </p>
     <ol class="flex flex-col gap-1.5 text-left text-[13px] text-foreground">
-      <li>1. 在页头「分析模型」下拉中选择一个模型</li>
-      <li>2. 在页头「执行模型」下拉中选择一个模型</li>
+      <li>1. 点击页头右上「⚙ 设置」，在「模型」中选择分析模型</li>
+      <li>2. 在「模型」中选择执行模型</li>
       <li>3. 配置完成后看板自动恢复，即可创建任务</li>
     </ol>
   </div>

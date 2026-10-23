@@ -1,19 +1,18 @@
 import type { Action } from "svelte/action"
 import type { Status } from "./types"
-import { insertIndex } from "./lane"
 
 /**
  * Pointer 拖拽控制器（Svelte 5 runes 模块状态）。
  * 偏离计划说明：计划冻结的 getState() 改为导出响应式 drag 状态——组件可直接 $derived 消费，
  * 省去手动桥接；onDrop 由 App 经 initDrag 注入。
  *
- * 语义：overIndex 仅是视觉插入指示（store 无排序 API，drop 只提交 status）。
+ * 语义：悬停只表达「目标泳道」（overStatus，整道虚线描边），不做列内精确插入指示——
+ * store 无排序 API，drop 只提交 status，落位由 updatedAt 排序决定（假指示已删）。
  */
 
 export const drag = $state({
   draggingId: null as string | null,
   overStatus: null as Status | null,
-  overIndex: null as number | null,
   x: 0,
   y: 0,
 })
@@ -30,7 +29,6 @@ function cleanup() {
   start = null
   drag.draggingId = null
   drag.overStatus = null
-  drag.overIndex = null
   ghost?.remove()
   ghost = null
   window.removeEventListener("pointermove", onPointerMove)
@@ -89,12 +87,13 @@ function onPointerMove(e: PointerEvent) {
   if (e.clientY < EDGE) window.scrollBy(0, -14)
   else if (e.clientY > window.innerHeight - EDGE) window.scrollBy(0, 14)
 
-  // 单行卡片流：拖到泳道左右缘时横向滚该泳道的卡片（卡片溢出泳道后仍可达）
+  // 单行卡片流：拖到泳道左右缘时横向滚该泳道的卡片（卡片溢出泳道后仍可达）。
+  // 仅在确有横向溢出时滚（换行列 flex-wrap 无横滚，scrollBy 是无效但省掉的功）
   if (col) {
     const rect = col.getBoundingClientRect()
-    const cards = col.querySelector(".cards")
+    const cards = col.querySelector(".cards") as HTMLElement | null
     const ZONE = 40
-    if (cards) {
+    if (cards && cards.scrollWidth > cards.clientWidth) {
       if (e.clientX < rect.left + ZONE) cards.scrollBy(-12, 0)
       else if (e.clientX > rect.right - ZONE) cards.scrollBy(12, 0)
     }
@@ -102,13 +101,9 @@ function onPointerMove(e: PointerEvent) {
 
   if (!col) {
     drag.overStatus = null
-    drag.overIndex = null
     return
   }
-  const status = col.dataset.status as Status
-  drag.overStatus = status
-  const cards = Array.from(col.querySelectorAll("[data-task-id]:not(.drag-ghost)")) as HTMLElement[]
-  drag.overIndex = insertIndex(cards.length, e.clientX, e.clientY, (i) => cards[i].getBoundingClientRect())
+  drag.overStatus = col.dataset.status as Status
 }
 
 function onPointerUp() {

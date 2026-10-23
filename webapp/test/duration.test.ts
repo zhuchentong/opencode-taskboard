@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { PHASE_LABELS, formatClock, formatDuration, formatPhaseLine, formatPhaseTooltip, hasRunningSpan, needsTicker, phaseViews, queueWaitMs, summarizeSpans } from "../src/lib/duration"
+import { groupSpanRows, PHASE_LABELS, formatClock, formatDuration, formatPhaseLine, formatPhaseTooltip, hasRunningSpan, needsTicker, phaseViews, queueWaitMs, summarizeSpans } from "../src/lib/duration"
 import type { Status, Task } from "../src/lib/types"
 
 const T = (status: Status, spans?: Task["spans"], over?: Partial<Task>): Task => ({
@@ -259,5 +259,37 @@ describe("summarizeSpans(分段计时汇总)", () => {
   test("终态任务(done)墙钟冻结于 updatedAt 而非 now", () => {
     const s = summarizeSpans(t([], { status: "done", updatedAt: 6000 }), 8000)
     expect(s.wallClock).toBe(5500) // createdAt 500 → updatedAt 6000
+  })
+})
+
+describe("groupSpanRows(分段明细按阶段聚合)", () => {
+  test("空数组返回空组列表", () => {
+    expect(groupSpanRows([])).toEqual([])
+  })
+
+  test("多 phase 交错出现时按首次出现顺序分组，组内保持原始行序", () => {
+    const rows = [
+      { phase: "analyzing", label: "分析中", round: 1, start: 1000, end: 2000, ms: 1000, running: false },
+      { phase: "executing", label: "执行中", round: 1, start: 2000, end: 3000, ms: 1000, running: false },
+      { phase: "analyzing", label: "分析中", round: 2, start: 4000, end: 5000, ms: 1000, running: false },
+      { phase: "executing", label: "执行中", round: 2, start: 6000, end: 8000, ms: 2000, running: false },
+    ] as const
+    const groups = groupSpanRows([...rows])
+    expect(groups.map((g) => g.phase)).toEqual(["analyzing", "executing"])
+    expect(groups[0].label).toBe("分析中")
+    expect(groups[0].rows.map((r) => r.round)).toEqual([1, 2])
+    expect(groups[1].rows.map((r) => r.round)).toEqual([1, 2])
+  })
+
+  test("running 行正常归组且原样保留", () => {
+    const rows = [
+      { phase: "pending", label: "排队", round: 1, start: 1000, end: 2000, ms: 1000, running: false },
+      { phase: "analyzing", label: "分析中", round: 1, start: 2000, end: null, ms: 2500, running: true },
+    ]
+    const groups = groupSpanRows(rows)
+    expect(groups).toHaveLength(2)
+    expect(groups[1].rows[0]).toEqual({
+      phase: "analyzing", label: "分析中", round: 1, start: 2000, end: null, ms: 2500, running: true,
+    })
   })
 })

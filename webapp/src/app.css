@@ -30,6 +30,9 @@
   --warning-foreground: oklch(0.279 0.077 45.635); /* amber-950 */
   --success: oklch(0.627 0.194 149.214);           /* green-600 */
   --success-foreground: oklch(0.985 0 0);
+  /* 七状态色板扩展令牌（明暗同值；暗色对比问题留视觉验收再调） */
+  --info: oklch(0.685 0.169 237.323);              /* sky-500：排队/信息 */
+  --note: oklch(0.606 0.25 292.723);               /* violet-500：草稿/待办 */
 }
 
 .dark {
@@ -55,6 +58,9 @@
   --warning-foreground: oklch(0.279 0.077 45.635);
   --success: oklch(0.627 0.194 149.214);
   --success-foreground: oklch(0.985 0 0);
+  /* 与 :root 同值（明暗同值令牌） */
+  --info: oklch(0.685 0.169 237.323);
+  --note: oklch(0.606 0.25 292.723);
 }
 
 @theme inline {
@@ -84,6 +90,8 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
+  --color-info: var(--info);
+  --color-note: var(--note);
 }
 
 @layer base {
@@ -114,8 +122,7 @@ body.drag-active {
   user-select: none;
 }
 @media (prefers-reduced-motion: reduce) {
-  .drag-ghost,
-  .drop-line {
+  .drag-ghost {
     transition: none;
     animation: none;
   }

@@ -2,7 +2,7 @@
   import { Badge } from "$lib/components/ui/badge"
   import { Button } from "$lib/components/ui/button"
   import { cardDrag, drag } from "$lib/drag.svelte"
-  import { STATUS_LABELS, timeAgo } from "$lib/board"
+  import { STATUS_LABELS, STATUS_TOKEN, timeAgo } from "$lib/board"
   import { formatClock, formatDuration, formatPhaseLine, formatPhaseTooltip, queueWaitMs } from "$lib/duration"
   import { ticker } from "$lib/ticker.svelte"
   import { badgeHue, normalizeProjectId } from "$lib/project-options"
@@ -42,23 +42,8 @@
   const canConfirm = $derived(
     (task.status === "analysis_confirm" || task.status === "completion_confirm") && (onconfirm || onquickreject),
   )
-  // 状态令牌映射：左缘色带与状态签圆点同源（analyzing/executing 蓝、确认列琥珀、done 灰）
-  const DOT_BY_STATUS: Record<string, string> = {
-    analyzing: "bg-primary",
-    executing: "bg-primary",
-    analysis_confirm: "bg-warning",
-    completion_confirm: "bg-warning",
-    done: "bg-muted-foreground/60",
-  }
-  const BAND_BY_STATUS: Record<string, string> = {
-    analyzing: "border-l-primary",
-    executing: "border-l-primary",
-    analysis_confirm: "border-l-warning",
-    completion_confirm: "border-l-warning",
-    done: "border-l-muted-foreground/40",
-  }
-  const dot = $derived(DOT_BY_STATUS[task.status] ?? "bg-muted-foreground/60")
-  const band = $derived(BAND_BY_STATUS[task.status] ?? "border-l-transparent")
+  // 状态令牌：左缘色带与状态签圆点同源，映射单一来源在 lib/board.ts 的 STATUS_TOKEN
+  const token = $derived(STATUS_TOKEN[task.status])
   // 项目徽标:归属解析 + 确定性着色(缺 projMap 时不显示)
   const proj = $derived(projMap?.get(normalizeProjectId(task)))
   // 两段计时：进行中的段随 ticker 逐秒递增；绝对时间走悬浮提示
@@ -78,7 +63,7 @@
 
 <article
   data-task-id={task.id}
-  class="group/card relative w-60 flex-none rounded-lg border border-l-4 bg-card p-3 text-card-foreground grid gap-1.5 text-sm cursor-pointer content-start {band} {task.status === 'done' ? 'opacity-80' : ''} {inflight ? 'opacity-60 animate-pulse' : ''} {failFlash ? 'fail-flash' : ''} hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring outline-none {draggable ? '' : 'cursor-not-allowed'}"
+  class="group/card relative w-60 flex-none rounded-lg border border-l-4 bg-card p-3 text-card-foreground grid gap-1.5 text-sm cursor-pointer content-start {token.band} {task.status === 'done' ? 'opacity-80' : ''} {inflight ? 'opacity-60 animate-pulse' : ''} {failFlash ? 'fail-flash' : ''} hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring outline-none {draggable ? '' : 'cursor-not-allowed'}"
   class:dragging-source={isDragging}
   data-draggable={draggable ? "yes" : "no"}
   data-status={task.status}
@@ -98,7 +83,7 @@
 >
   <div class="flex flex-wrap items-center gap-1">
     <Badge variant="outline" class="gap-1.5 font-normal text-muted-foreground">
-      <span class="size-1.5 rounded-full {dot}"></span>{STATUS_LABELS[task.status]}
+      <span class="size-1.5 rounded-full {token.dot}"></span>{STATUS_LABELS[task.status]}
     </Badge>
     {#if proj}
       <Badge
@@ -117,7 +102,7 @@
     title={[phaseTitle, queueTitle].filter(Boolean).join("\n") || undefined}
   >
     {#if phaseLine}<span class="tabular-nums flex-none">{phaseLine}</span>{/if}
-    {#if queueLine}<span class="tabular-nums flex-none text-warning">{queueLine}</span>{/if}
+    {#if queueLine}<span class="tabular-nums flex-none text-info">{queueLine}</span>{/if}
     <span class="truncate">{timeAgo(task.updatedAt)}</span>
   </div>
   {#if canConfirm}

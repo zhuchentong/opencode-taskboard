@@ -7,7 +7,7 @@
   import * as Tabs from "$lib/components/ui/tabs"
   import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "$lib/components/ui/table"
   import { STATUS_LABELS, timeAgo } from "$lib/board"
-  import { formatClock, formatDuration, phaseViews, queueWaitMs, summarizeSpans } from "$lib/duration"
+  import { formatClock, formatDuration, groupSpanRows, queueWaitMs, summarizeSpans } from "$lib/duration"
   import { ticker } from "$lib/ticker.svelte"
   import { confirmDialog } from "$lib/notify"
   import { formatTokens, totalTokens } from "$lib/usage"
@@ -42,6 +42,8 @@
   let comment = $state("")
   let rejectOpen = $state(!!initialReject)
   let rejectComment = $state("")
+  /** 打回写盘进行中：防双击重入（comments 追加非幂等，重入会插两条重复评论） */
+  let rejectSubmitting = $state(false)
   let rejectInput = $state<HTMLTextAreaElement | null>(null)
   let panel = $state<HTMLElement | null>(null)
   let editing = $state(false) // 任一编辑器持有焦点时，快照不顶掉输入
@@ -72,10 +74,9 @@
 
   const CONFIRM_COLS = ["analysis_confirm", "completion_confirm"]
   const canConfirm = $derived(CONFIRM_COLS.includes(task.status))
-  // 两段计时明细；进行中的段随心跳逐秒递增
-  const views = $derived(phaseViews(task, ticker.now))
-  // 分段计时汇总（spanLog 账本：排队/分析/待确认/执行每段独立留存，含问答循环与打回重做）
+  // 分段计时汇总（spanLog 账本：排队/分析/待确认/执行每段独立留存，含问答循环与打回重做），按阶段聚合分组展示
   const spanSummary = $derived(summarizeSpans(task, ticker.now))
+  const spanGroups = $derived(groupSpanRows(spanSummary.rows))
   const queueMs = $derived(queueWaitMs(task, ticker.now))
   // 消耗明细行（顺序即展示顺序）；合计单列一行
   const USAGE_ROWS: { key: keyof Omit<TaskUsage, "at">; label: string }[] = [
@@ -104,21 +105,30 @@
     if (ok) onclose()
   }
 
-  function reject() {
+  async function reject() {
     const c = rejectComment.trim()
-    if (!c) return
-    onwrite(
-      task.id,
-      {
-        status: "pending",
-        claim: undefined,
-        comments: [...task.comments, { author: "user", text: c, createdAt: Date.now() }],
-      },
-      { action: "reject", comment: c },
-      "打回失败",
-    )
-    rejectComment = ""
-    rejectOpen = false
+    // 防重入 + 必评论校验（产品不变量：打回必评论）
+    if (!c || rejectSubmitting) return
+    rejectSubmitting = true
+    try {
+      // 写入成功才清输入关弹窗；失败保持打开 + toast 报错，输入不丢可直接重试
+      const ok = await onwrite(
+        task.id,
+        {
+          status: "pending",
+          claim: undefined,
+          comments: [...task.comments, { author: "user", text: c, createdAt: Date.now() }],
+        },
+        { action: "reject", comment: c },
+        "打回失败",
+      )
+      if (ok) {
+        rejectComment = ""
+        rejectOpen = false
+      }
+    } finally {
+      rejectSubmitting = false
+    }
   }
 
   function addComment() {
@@ -140,6 +150,11 @@
       rejectOpen = false
     }
   }
+
+  // 打回弹窗关闭（Esc/取消/写成功）即复位提交态，重开表单时状态干净、不残留 true
+  $effect(() => {
+    if (!rejectOpen) rejectSubmitting = false
+  })
 </script>
 
 <Dialog.Root open onOpenChange={(o) => !o && onclose()}>
@@ -172,7 +187,7 @@
         </Tabs.List>
       </div>
       <!-- 焦点锚 + 唯一滚动区：页头/页签/页脚固定，仅本容器内部滚动 -->
-      <div class="min-h-0 flex-1 overflow-y-auto outline-none" bind:this={panel} tabindex="-1">
+      <div class="h-[min(60dvh,36rem)] overflow-y-auto outline-none" bind:this={panel} tabindex="-1">
         <Tabs.Content value="content" class="grid gap-4">
           <label class="grid gap-1 text-[13px]">
             <span class="text-xs text-muted-foreground">标题</span>
@@ -246,56 +261,35 @@
             {/if}
           </div>
 
-          {#if views.length > 0}
-            <section class="grid gap-1.5 rounded-lg border p-2.5">
-              <h3 class="text-[13px] font-medium">计时</h3>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>阶段</TableHead>
-                    <TableHead>开始</TableHead>
-                    <TableHead>结束</TableHead>
-                    <TableHead class="text-right">用时</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {#each views as v (v.phase)}
-                    <TableRow>
-                      <TableCell>{v.label}</TableCell>
-                      <TableCell>{formatClock(v.startedAt)}</TableCell>
-                      <TableCell>{v.running ? "进行中" : v.endedAt !== undefined ? formatClock(v.endedAt) : "—"}</TableCell>
-                      <TableCell class="text-right tabular-nums">{v.running ? `已 ${formatDuration(v.duration)}` : formatDuration(v.duration)}</TableCell>
-                    </TableRow>
-                  {/each}
-                </TableBody>
-              </Table>
-            </section>
-          {/if}
-
           {#if spanSummary.rows.length > 0}
             <section class="grid gap-1.5 rounded-lg border p-2.5">
               <h3 class="text-[13px] font-medium">分段计时</h3>
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>阶段</TableHead>
+                    <TableHead>明细</TableHead>
                     <TableHead>开始</TableHead>
                     <TableHead>结束</TableHead>
                     <TableHead class="text-right">耗时</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {#each spanSummary.rows as r (r.phase + r.start)}
-                    <TableRow>
-                      <TableCell>
-                        {r.label}
-                        <span class="ml-1 text-[11px] text-muted-foreground">R{r.round}</span>
-                        {#if r.running}<Badge variant="secondary">进行中</Badge>{/if}
-                      </TableCell>
-                      <TableCell class="text-[12px]">{formatClock(r.start)}</TableCell>
-                      <TableCell class="text-[12px]">{r.running ? "—" : formatClock(r.end!)}</TableCell>
-                      <TableCell class="text-right tabular-nums">{formatDuration(r.ms)}</TableCell>
+                  {#each spanGroups as g (g.phase)}
+                    <!-- 组头行：阶段小节头，不响应悬停高亮 -->
+                    <TableRow class="hover:bg-transparent">
+                      <TableCell colspan="4" class="bg-muted/40 text-[12px] font-medium text-muted-foreground">{g.label}</TableCell>
                     </TableRow>
+                    {#each g.rows as r (r.phase + r.start)}
+                      <TableRow>
+                        <TableCell class="pl-5 text-[12px] text-muted-foreground">
+                          R{r.round}
+                          {#if r.running}<Badge variant="secondary" class="ml-1">进行中</Badge>{/if}
+                        </TableCell>
+                        <TableCell class="text-[12px]">{formatClock(r.start)}</TableCell>
+                        <TableCell class="text-[12px]">{r.running ? "—" : formatClock(r.end!)}</TableCell>
+                        <TableCell class="text-right tabular-nums">{formatDuration(r.ms)}</TableCell>
+                      </TableRow>
+                    {/each}
                   {/each}
                   <TableRow>
                     <TableCell colspan="4" class="text-right text-[12px] text-muted-foreground">
@@ -372,7 +366,7 @@
           bind:value={rejectComment}></Textarea>
         <div class="flex justify-end gap-2">
           <Button variant="ghost" onclick={() => (rejectOpen = false)}>取消</Button>
-          <Button variant="destructive" disabled={!rejectComment.trim()} onclick={reject}>打回</Button>
+          <Button variant="destructive" disabled={!rejectComment.trim() || rejectSubmitting} onclick={reject}>打回</Button>
         </div>
       </div>
     {/if}

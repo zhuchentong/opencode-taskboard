@@ -21,9 +21,10 @@ describe("回归基线载体标记", () => {
     expect(detail).not.toContain("showCloseButton={false}")
     expect(detail).not.toContain(".Close")
   })
-  test("手写拖拽接线恢复（cardDrag action + 插入指示线）", () => {
+  test("手写拖拽接线保留，假插入指示线已删（#4：drop 只提交 status，指示与结果背离）", () => {
     expect(card).toContain("use:cardDrag={task.id}")
-    expect(lane).toContain('class="drop-line')
+    // drop-line 是「假插入指示」：松手后按 updatedAt 重排，落点与指示不符，已按产品决策移除并不再恢复
+    expect(lane).not.toContain("drop-line")
   })
   test("终端连接判定外置到纯函数 decideTerminalConn（C1 防线）", () => {
     expect(terminal).toContain("decideTerminalConn(")

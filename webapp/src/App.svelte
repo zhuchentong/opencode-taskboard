@@ -6,11 +6,12 @@
   import { applySnapshot, beginOptimistic, emptyState, settle, visibleTasks, type BoardState } from "./lib/optimistic"
   import { STATUSES } from "./lib/board"
   import { normalizeProjectId, projectFilterOptions, projectMap } from "./lib/project-options"
-  import { notify } from "./lib/notify"
+  import { notify, confirmDialog } from "./lib/notify"
   import { initDrag } from "./lib/drag.svelte"
   import { needsTicker } from "./lib/duration"
   import { startTicker, stopTicker } from "./lib/ticker.svelte"
   import { connectEvents } from "./lib/events"
+  import { shouldEmit } from "./lib/throttle"
   import { modelsConfigured } from "./lib/model-options"
   import { Skeleton } from "$lib/components/ui/skeleton"
   import { Toaster } from "$lib/components/ui/sonner"
@@ -46,6 +47,9 @@
   const detailTask = $derived(detailId ? (visible.find((t) => t.id === detailId) ?? null) : null)
   // 乐观写入的视觉态：在途（半透明+pulse）与失败回滚（红闪一拍）
   let flashIds = $state<Set<string>>(new Set())
+
+  // silent 失败 toast 的固定窗口节流记录（taskId → 上次弹出时刻）
+  const lastToast = new Map<string, number>()
 
   function flashFail(taskId: string) {
     const next = new Set(flashIds)
@@ -94,7 +98,10 @@
       .catch((e) => {
         board = settle(board, taskId, false)
         flashFail(taskId)
+        // silent 路径仍需让用户知道失败原因：固定窗口节流（每任务 5s 至多一条），避免高频路径轰炸
         if (!silent) notify("error", `${failMsg}：${friendlyError(e)}`)
+        else if (shouldEmit(lastToast, taskId, Date.now()))
+          notify("error", `${failMsg}：${friendlyError(e)}`)
         return false
       })
   }
@@ -130,9 +137,15 @@
   }
 
   // 快速通过：确认列卡片一键放行（乐观通道；失败静默红闪——双击重复操作高发，toast 会轰炸）
+  // completion_confirm 是终态（→done 不可再打回），卡片快捷入口需弹层确认；analysis_confirm 可逆，保持一键
   function quickConfirm(task: Task) {
-    const nextStatus = task.status === "analysis_confirm" ? "executing" : "done"
-    writeTask(task.id, { status: nextStatus }, { action: "confirm" }, "确认失败", true)
+    if (task.status === "analysis_confirm") {
+      writeTask(task.id, { status: "executing" }, { action: "confirm" }, "确认失败", true)
+      return
+    }
+    confirmDialog(`通过并完结「${task.title}」？`, "任务将进入「已完成」，不可再打回。").then((ok) => {
+      if (ok) writeTask(task.id, { status: "done" }, { action: "confirm" }, "确认失败", true)
+    })
   }
 
   async function refresh() {
@@ -229,6 +242,14 @@
     onmodel={(phase, value) => void changeSettings({ [phase]: value })}
     onsetmode={setThemeMode}
   />
+
+  {#if loaded && conn !== "live"}
+    <div class="mx-auto w-full max-w-7xl px-4 pt-2.5">
+      <div class="rounded-lg border border-warning/40 bg-warning/10 px-3 py-1.5 text-[13px] text-warning">
+        实时连接已断开，正在自动重试，数据可能延迟
+      </div>
+    </div>
+  {/if}
 
   {#if loaded}
     {#if modelsReady}
